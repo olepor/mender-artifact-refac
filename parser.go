@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,6 +183,7 @@ func (h *headerTar) Reader(b []byte) (n int, err error) {
 				return 0, err
 			}
 		}
+		append(h.headers, sh)
 	}
 }
 
@@ -224,8 +226,16 @@ type typeInfo struct {
 	// type-info
 }
 
+func (t *typeInfo) Reader(b []byte) (n int, err error) {
+	return io.Copy(ioutil.Discard, bytes.NewReader(b))
+}
+
 type metaData struct {
 	// meta-data
+}
+
+func (t *metaData) Reader(b []byte) (n int, err error) {
+	return io.Copy(ioutil.Discard, bytes.NewReader(b))
 }
 
 // Wrapper for all the sub-headers
@@ -259,19 +269,7 @@ type headers struct {
 }
 
 func (h *headers) Reader(b []byte) (n int, err error) {
-	switch h.currentWriteType {
-	case typeInfoSub:
-		sh := subHeader{}
-		ti := typeInfo{}
-		_, err = io.Copy(ti, b)
-		if err != nil {
-			return 0, err
-		}
-		append(h.headers, subHeader)
-	default:
-		return 0, errors.New("Unrecognized type")
-
-	}
+	return nil, errors.New("Unimplemented")
 }
 
 // Another tarball
@@ -289,8 +287,73 @@ type headerAugment struct {
 	subHeaders []subHeader
 }
 
+func (h *headerAugment) Reader(b []byte) (n int, err error) {
+	// The input is gzipped and tarred, so embed the two
+	// readers around the byte stream
+	// First wrap the gzip writer
+	tr := tar.TarReader(gzip.NewReader(bytes.Buffer(b)))
+	hdr, err := tr.Next()
+	if err != nil {
+		return 0, err
+	}
+	if hdr.Name != "header-info" {
+		return 0, fmt.Errorf("Unexpected header: %s", hdr.Name)
+	}
+	// Read the header info
+	if _, err = io.Copy(h.headerInfo, r); err != nil {
+		return 0, nil
+	}
+	// Read all the headers
+	for {
+		// hdr.Name is already set, as we broke out of the script parsing loop
+		if filepath.Base(hdr.Name) != "type-info" {
+			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
+		}
+		sh := subHeader{}
+		if _, err = io.Copy(sh.typeInfo, tr); err != nil {
+			return 0, err
+		}
+		hdr, err = tr.Next()
+		if err != nil {
+			return 0, err
+		}
+		if filepath.Base(hdr.Name) == "meta-data" {
+			_, err = io.Copy(sh.metaData, tr)
+			if err != nil {
+				return 0, err
+			}
+			hdr, err = tr.Next()
+			if err != nil {
+				return 0, err
+			}
+		}
+		append(h.headers, sh)
+	}
+}
+
 type payLoad struct {
 	// Give me morez!
+}
+
+func (p *payLoad) Reader(b []byte) (n int, err error) {
+	tr := tar.NewReader(gzip.NewReader(b))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return len(b), nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		f, err := os.Open(filepath.Base(hdr.Name))
+		if err != nil {
+			return 0, err
+		}
+		_, err := io.Copy(f, tr)
+		if err != nil {
+			return 0, err
+		}
+	}
 }
 
 //     data
@@ -310,6 +373,16 @@ type payLoad struct {
 type data struct {
 	// Updates 4 all ^^
 	payloads []payLoad
+}
+
+func (d *data) Reader(b []byte) (n int, err error) {
+	p := payLoad{}
+	n, err := io.Copy(p, bytes.NewReader(b))
+	if err != nil {
+		return n, err
+	}
+	append(p.payloads, p)
+	return len(b), nil
 }
 
 type Parser struct {

@@ -1,10 +1,10 @@
 package parser
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"archive/tar"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,13 +51,13 @@ type Manifest struct {
 
 func (m *Manifest) Write(b []byte) (n int, err error) {
 	r := bytes.NewBuffer(b)
-	scanner := bufio.Scanner(r)
+	scanner := bufio.NewScanner(r)
 	var line string
 	for scanner.HasNext() {
 		line := scanner.Next()
 		tmp := strings.Split(line, " ")
-		append(m.data,
-			manifestData{
+		m.data = append(m.data,
+			ManifestData{
 				signature: tmp[0],
 				name:      tmp[1]})
 	}
@@ -83,12 +83,13 @@ type ManifestAugment struct {
 }
 
 func (m *ManifestAugment) Write(b []byte) (n int, err error) {
-	scanner := bufio.Scanner(b)
+	br := bytes.NewReader(b)
+	scanner := bufio.NewScanner(br)
 	var line string
 	for scanner.HasNext() {
 		line := scanner.Next()
 		tmp := strings.Split(line, " ")
-		append(m.augData,
+		m.augData = append(m.augData,
 			ManifestData{
 				signature: tmp[0],
 				name:      tmp[1]})
@@ -190,7 +191,7 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 				return 0, err
 			}
 		}
-		append(h.headers, sh)
+		h.headers = append(h.headers, sh)
 	}
 }
 
@@ -226,7 +227,8 @@ func (s Scripts) Next(filename string) error {
 // The scripts Write reads a file from the byte stream
 // and writes it to /scripts/<ScriptName>
 func (s Scripts) Write(b []byte) (n int, err error) {
-	return io.Copy(s.file, bytes.NewReader(b))
+	_, err = io.Copy(s.file, bytes.NewReader(b))
+	return len(b), err
 }
 
 type TypeInfo struct {
@@ -234,7 +236,8 @@ type TypeInfo struct {
 }
 
 func (t TypeInfo) Write(b []byte) (n int, err error) {
-	return io.Copy(ioutil.Discard, bytes.NewReader(b))
+	_, err = io.Copy(ioutil.Discard, bytes.NewReader(b))
+	return len(b), err
 }
 
 type MetaData struct {
@@ -242,7 +245,8 @@ type MetaData struct {
 }
 
 func (t MetaData) Write(b []byte) (n int, err error) {
-	return io.Copy(ioutil.Discard, bytes.NewReader(b))
+	_, err = io.Copy(ioutil.Discard, bytes.NewReader(b))
+	return len(b), err
 }
 
 // Wrapper for all the sub-headers
@@ -290,7 +294,8 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 	// The input is gzipped and tarred, so embed the two
 	// readers around the byte stream
 	// First wrap the gzip writer
-	zr, err := gzip.NewReader(bytes.Buffer(b))
+	br := bytes.NewReader(b)
+	zr, err := gzip.NewReader(br)
 	if err != nil {
 		return 0, err
 	}
@@ -330,7 +335,7 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 				return 0, err
 			}
 		}
-		append(h.subHeaders, sh)
+		h.subHeaders = append(h.subHeaders, sh)
 	}
 }
 
@@ -338,8 +343,12 @@ type PayLoad struct {
 	// Give me morez!
 }
 
-func (p *PayLoad) Write(b []byte) (n int, err error) {
-	tr := tar.NewWrite(gzip.NewReader(b))
+func (p PayLoad) Write(b []byte) (n int, err error) {
+	gzr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return 0, err
+	}
+	tr := tar.NewReader(gzr)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -379,18 +388,42 @@ type Data struct {
 }
 
 func (d *Data) Write(b []byte) (n int, err error) {
-	p := payLoad{}
-	n, err = io.Copy(p, bytes.NewWrite(b))
+	p := PayLoad{}
+	_, err = io.Copy(p, bytes.NewReader(b))
 	if err != nil {
-		return n, err
+		return 0, err
 	}
-	append(p.payloads, p)
+	d.payloads = append(d.payloads, p)
 	return len(b), nil
 }
 
 type Parser struct {
 	// The parser
 	// lexer *Lexer
+}
+
+func (p *Parser) Write(b []byte) (n int, err error) {
+	gzr, err := gzip.NewReader(bytes.NewBuffer(b))
+	if err != nil {
+		return 0, err
+	}
+	tr = tar.NewReader(gzr)
+	// Expect `version`
+	hdr, err := tar.Next()
+	if err != nil {
+		return 0, err
+	}
+	if hdr.Name != "version" {
+		return 0, fmt.Errorf("Expected version. Got %s", hdr.Name)
+	}
+	// Expect `manifest`
+	hdr, err = tar.Next()
+	if err != nil {
+		return 0, err
+	}
+	if hdr.Name != "manifest" {
+		return 0, fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
+	}
 }
 
 // func New(lexer *Lexer) *Parser {

@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
+	"archive/tar"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,13 +23,13 @@ import (
 // 	"format": "mender",
 // 	"version": 3
 // }
-type version struct {
+type Version struct {
 	format  string
 	version int
 }
 
 // Accept the byte body from the tar reader
-func (v *version) Reader(b []byte) (n int, err error) {
+func (v *Version) Write(b []byte) (n int, err error) {
 	if err := json.Unmarshal(b, v); err != nil {
 		return 0, err
 	}
@@ -38,17 +40,18 @@ func (v *version) Reader(b []byte) (n int, err error) {
 // 5ac394718e795d454941487c53d32  data/0000/update.ext4
 // b7793eb1c57c4694532f96383b619  header.tar.gz
 // a343fec7ba3b2983c2ecbbb041a35  version
-type manifestData struct {
-	signature []byte
+type ManifestData struct {
+	signature string
 	name      string
 }
 
-type manifest struct {
-	data []manifestData
+type Manifest struct {
+	data []ManifestData
 }
 
-func (m *manifest) Reader(b []byte) (n int, err error) {
-	scanner := Scanner(b)
+func (m *Manifest) Write(b []byte) (n int, err error) {
+	r := bytes.NewBuffer(b)
+	scanner := bufio.Scanner(r)
 	var line string
 	for scanner.HasNext() {
 		line := scanner.Next()
@@ -62,41 +65,41 @@ func (m *manifest) Reader(b []byte) (n int, err error) {
 }
 
 // Format: base64 encoded ecdsa or rsa signature
-type manifestSig struct {
+type ManifestSig struct {
 	// More data
 	sig []byte
 }
 
-func (m *manifestSig) Reader(b []byte) (n int, err error) {
+func (m *ManifestSig) Write(b []byte) (n int, err error) {
 	m.sig = b
 	return len(b), nil
 }
 
 // c57c4694532f96383b619  header-augment.tar.gz
 // 8e795d454941487c53d32  data/0000/update.delta
-type manifestAugment struct {
+type ManifestAugment struct {
 	// Some Data 4 deltaz
-	augData []manifestData
+	augData []ManifestData
 }
 
-func (m *manifestAugment) Reader(b []byte) (n int, err error) {
-	scanner := Scanner(b)
+func (m *ManifestAugment) Write(b []byte) (n int, err error) {
+	scanner := bufio.Scanner(b)
 	var line string
 	for scanner.HasNext() {
 		line := scanner.Next()
 		tmp := strings.Split(line, " ")
-		append(m.data,
-			manifestData{
+		append(m.augData,
+			ManifestData{
 				signature: tmp[0],
 				name:      tmp[1]})
 	}
 	return len(b), nil
 }
 
-type headerTar struct {
-	headerInfo headerInfo
-	scripts    scripts
-	headers    headers
+type HeaderTar struct {
+	headerInfo HeaderInfo
+	scripts    Scripts
+	headers    []SubHeader
 }
 
 // +---header.tar.gz (tar format)
@@ -123,11 +126,15 @@ type headerTar struct {
 //    	|         |    `---<more headers>
 //             |
 //             `---000n ...
-func (h *headerTar) Reader(b []byte) (n int, err error) {
+func (h *HeaderTar) Write(b []byte) (n int, err error) {
 	// The input is gzipped and tarred, so embed the two
 	// readers around the byte stream
 	// First wrap the gzip writer
-	tr := tar.TarReader(gzip.NewReader(bytes.Buffer(b)))
+	zr, err := gzip.NewReader(bytes.NewBuffer(b))
+	if err != nil {
+		return 0, err
+	}
+	tr := tar.NewReader(zr)
 	hdr, err := tr.Next()
 	if err != nil {
 		return 0, err
@@ -136,7 +143,7 @@ func (h *headerTar) Reader(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Unexpected header: %s", hdr.Name)
 	}
 	// Read the header info
-	if _, err = io.Copy(h.headerInfo, r); err != nil {
+	if _, err = io.Copy(h.headerInfo, tr); err != nil {
 		return 0, nil
 	}
 	// Read all the scripts
@@ -145,7 +152,7 @@ func (h *headerTar) Reader(b []byte) (n int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		if len(hdr.Name) == 4 && atoi(hdr.Name) {
+		if len(hdr.Name) == 4 { //  && atoi(hdr.Name) { TODO -- fixup
 			break // Move on to parsing headers
 		}
 		if filepath.Dir(hdr.Name) != "scripts" {
@@ -165,7 +172,7 @@ func (h *headerTar) Reader(b []byte) (n int, err error) {
 		if filepath.Base(hdr.Name) != "type-info" {
 			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
 		}
-		sh := subHeader{}
+		sh := SubHeader{}
 		if _, err = io.Copy(sh.typeInfo, tr); err != nil {
 			return 0, err
 		}
@@ -187,54 +194,54 @@ func (h *headerTar) Reader(b []byte) (n int, err error) {
 	}
 }
 
-type headerInfo struct {
+type HeaderInfo struct {
 	// Dataz
 	data []byte
 }
 
-func (h *headerInfo) Reader(b []byte) (n int, err error) {
+func (h HeaderInfo) Write(b []byte) (n int, err error) {
 	return 0, nil
 }
 
 // All the Artifact scripts
 type script struct {
-	scrpts []string
+	// Identity
 }
 
-type scripts struct {
+type Scripts struct {
 	currentScriptName string
 	scriptDir         string // `/scripts`
 	file              *os.File
 }
 
-func (s *scripts) Next(filename string) error {
+func (s Scripts) Next(filename string) error {
 	f, err := os.Open(filepath.Join(s.scriptDir, filename))
 	if err != nil {
 		return err
 	}
-	scripts.file = f
+	s.file = f
 	return nil
 }
 
-// The scripts Reader reads a file from the byte stream
+// The scripts Write reads a file from the byte stream
 // and writes it to /scripts/<ScriptName>
-func (s *scripts) Reader(b []byte) (n int, err error) {
-	return io.Copy(s.file)
+func (s Scripts) Write(b []byte) (n int, err error) {
+	return io.Copy(s.file, bytes.NewReader(b))
 }
 
-type typeInfo struct {
+type TypeInfo struct {
 	// type-info
 }
 
-func (t *typeInfo) Reader(b []byte) (n int, err error) {
+func (t TypeInfo) Write(b []byte) (n int, err error) {
 	return io.Copy(ioutil.Discard, bytes.NewReader(b))
 }
 
-type metaData struct {
+type MetaData struct {
 	// meta-data
 }
 
-func (t *metaData) Reader(b []byte) (n int, err error) {
+func (t MetaData) Write(b []byte) (n int, err error) {
 	return io.Copy(ioutil.Discard, bytes.NewReader(b))
 }
 
@@ -250,48 +257,44 @@ func (t *metaData) Reader(b []byte) (n int, err error) {
 //        +- type-info
 //        |
 //        +- meta-data
-type subHeader struct {
+type SubHeader struct {
 	name     string
-	typeInfo typeInfo
-	metaData metaData
+	typeInfo TypeInfo
+	metaData MetaData
 }
 
-type headerSubType int
-
-const (
-	typeInfoSub headerSubType = iota,
-		metaDataSub
-)
-
-type headers struct {
-	currentWriteType headerSubType
-	headers          []subHeader
+type Headers struct {
+	headers []SubHeader
 }
 
-func (h *headers) Reader(b []byte) (n int, err error) {
-	return nil, errors.New("Unimplemented")
+func (h *Headers) Write(b []byte) (n int, err error) {
+	return 0, errors.New("Unimplemented")
 }
 
 // Another tarball
-type headerSigned struct {
+type HeaderSigned struct {
 	// data
 	data       []byte // TODO - What is in the header?
-	headerInfo headerInfo
-	scripts    scripts
+	headerInfo HeaderInfo
+	scripts    Scripts
 }
 
 // Another tar-ball
 // Augmented header is not signed!
-type headerAugment struct {
-	headerInfo headerInfo
-	subHeaders []subHeader
+type HeaderAugment struct {
+	headerInfo HeaderInfo
+	subHeaders []SubHeader
 }
 
-func (h *headerAugment) Reader(b []byte) (n int, err error) {
+func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 	// The input is gzipped and tarred, so embed the two
 	// readers around the byte stream
 	// First wrap the gzip writer
-	tr := tar.TarReader(gzip.NewReader(bytes.Buffer(b)))
+	zr, err := gzip.NewReader(bytes.Buffer(b))
+	if err != nil {
+		return 0, err
+	}
+	tr := tar.NewReader(zr)
 	hdr, err := tr.Next()
 	if err != nil {
 		return 0, err
@@ -300,7 +303,7 @@ func (h *headerAugment) Reader(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Unexpected header: %s", hdr.Name)
 	}
 	// Read the header info
-	if _, err = io.Copy(h.headerInfo, r); err != nil {
+	if _, err = io.Copy(h.headerInfo, tr); err != nil {
 		return 0, nil
 	}
 	// Read all the headers
@@ -309,7 +312,7 @@ func (h *headerAugment) Reader(b []byte) (n int, err error) {
 		if filepath.Base(hdr.Name) != "type-info" {
 			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
 		}
-		sh := subHeader{}
+		sh := SubHeader{}
 		if _, err = io.Copy(sh.typeInfo, tr); err != nil {
 			return 0, err
 		}
@@ -327,16 +330,16 @@ func (h *headerAugment) Reader(b []byte) (n int, err error) {
 				return 0, err
 			}
 		}
-		append(h.headers, sh)
+		append(h.subHeaders, sh)
 	}
 }
 
-type payLoad struct {
+type PayLoad struct {
 	// Give me morez!
 }
 
-func (p *payLoad) Reader(b []byte) (n int, err error) {
-	tr := tar.NewReader(gzip.NewReader(b))
+func (p *PayLoad) Write(b []byte) (n int, err error) {
+	tr := tar.NewWrite(gzip.NewReader(b))
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -349,7 +352,7 @@ func (p *payLoad) Reader(b []byte) (n int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		_, err := io.Copy(f, tr)
+		_, err = io.Copy(f, tr)
 		if err != nil {
 			return 0, err
 		}
@@ -370,14 +373,14 @@ func (p *payLoad) Reader(b []byte) (n int, err error) {
 //        |
 //        +---000n.tar.gz ...
 //             `--...
-type data struct {
+type Data struct {
 	// Updates 4 all ^^
-	payloads []payLoad
+	payloads []PayLoad
 }
 
-func (d *data) Reader(b []byte) (n int, err error) {
+func (d *Data) Write(b []byte) (n int, err error) {
 	p := payLoad{}
-	n, err := io.Copy(p, bytes.NewReader(b))
+	n, err = io.Copy(p, bytes.NewWrite(b))
 	if err != nil {
 		return n, err
 	}
@@ -387,9 +390,9 @@ func (d *data) Reader(b []byte) (n int, err error) {
 
 type Parser struct {
 	// The parser
-	lexer *Lexer
+	// lexer *Lexer
 }
 
-func New(lexer *Lexer) *Parser {
-	return Parser{lexer}
-}
+// func New(lexer *Lexer) *Parser {
+// 	return Parser{lexer}
+// }

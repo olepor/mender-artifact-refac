@@ -397,6 +397,17 @@ func (d *Data) Write(b []byte) (n int, err error) {
 	return len(b), nil
 }
 
+type Artifact struct {
+	Version         Version
+	Manifest        Manifest
+	ManifestSig     ManifestSig
+	ManifestAugment ManifestAugment
+	HeaderTar       HeaderTar
+	HeaderAugment   HeaderAugment
+	HeaderSigned    HeaderSigned
+	Data            Data
+}
+
 type Parser struct {
 	// The parser
 	// lexer *Lexer
@@ -407,6 +418,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if err != nil {
 		return 0, err
 	}
+	artifact := Artifact{}
 	tr = tar.NewReader(gzr)
 	// Expect `version`
 	hdr, err := tar.Next()
@@ -416,14 +428,73 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if hdr.Name != "version" {
 		return 0, fmt.Errorf("Expected version. Got %s", hdr.Name)
 	}
+	if _, err = io.Copy(artifact.Version, tr); err != nil {
+		return 0, err
+	}
 	// Expect `manifest`
-	hdr, err = tar.Next()
+	hdr, err = tr.Next()
 	if err != nil {
 		return 0, err
 	}
 	if hdr.Name != "manifest" {
 		return 0, fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
 	}
+	if _, err = io.Copy(artifact.Manifest); err != nil {
+		return 0, err
+	}
+	// Optional expect `manifest.sig`
+	hdr, err := tar.Next()
+	if err != nil {
+		return 0, err
+	}
+	if hdr.Name == "manifest.sig" {
+		if _, err = io.Copy(artifact.ManifestSig, tr); err != nil {
+			return 0, err
+		}
+		// Optional expect `manifest-augment`
+		hdr, err = tr.Next()
+		if err != nil {
+			return 0, err
+		}
+		if hdr.Name == "manifest-augment" {
+			if _, err = io.Copy(artifact.ManifestAugment, tr); err != nil {
+				return 0, err
+			}
+		}
+		hdr, err = tr.Next()
+		if err != nil {
+			return 0, err
+		}
+	}
+	// Expect `header.tar.gz`
+	if hdr.Name != "header.tar.gz" {
+		return 0, fmt.Errorf("Expected `header.tar.gz`. Got %s", hdr.Name)
+	}
+	if _, err = io.Copy(artifact.HeaderTar, tr); err != nil {
+		return 0, err
+	}
+	// Optional `header-augment.tar.gz`
+	hdr, err = tr.Next()
+	if err != nil {
+		return 0, err
+	}
+	if hdr.Name == "header-augment.tar.gz" {
+		if _, err = io.Copy(artifact.HeaderAugment, tr); err != nil {
+			return 0, err
+		}
+		hdr, err = tr.Next()
+		if err != nil {
+			return 0, err
+		}
+	}
+	// Expect `data`
+	if filepath.Dir(hdr.Name) != "data" {
+		return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
+	}
+	if _, err = io.Copy(artifact.Data, tr); err != nil {
+		return 0, err
+	}
+	return len(b), nil
 }
 
 // func New(lexer *Lexer) *Parser {

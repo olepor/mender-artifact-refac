@@ -400,25 +400,46 @@ type PayLoad struct {
 }
 
 func (p PayLoad) Write(b []byte) (n int, err error) {
-	gzr, err := gzip.NewReader(bytes.NewReader(b))
+	fmt.Println("... Discarding update (for now)")
+	_, err = io.Copy(ioutil.Discard, bytes.NewReader(b))
 	if err != nil {
-		return 0, errors.Wrap(err, "Payload: Write: Could not open zip-stream")
+		return 0, errors.Wrap(err, "Payload: Write: Failed to discard update")
 	}
-	tr := tar.NewReader(gzr)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			return len(b), nil
-		}
-		if err != nil {
-			return 0, errors.Wrap(err, "Payload: Write: Tar failed to produce the next header")
-		}
-		p.Name = hdr.Name
-		_, err = io.Copy(&p.Data, tr)
-		if err != nil {
-			return 0, errors.Wrap(err, "Payload: Write: Failed to write to the Data buffer")
-		}
-	}
+	return 0, nil
+	// gzr, err := gzip.NewReader(bytes.NewReader(b))
+	// if err != nil {
+	// 	return 0, errors.Wrap(err, "Payload: Write: Could not open zip-stream")
+	// }
+	// tr := tar.NewReader(gzr)
+	// for {
+	// 	hdr, err := tr.Next()
+	// 	if err == io.EOF {
+	// 		return len(b), nil
+	// 	}
+	// 	if err != nil {
+	// 		return 0, errors.Wrap(err, "Payload: Write: Tar failed to produce the next header")
+	// 	}
+	// 	p.Name = hdr.Name
+	// 	fmt.Printf("Payload name: %s\n", hdr.Name)
+	// 	if _, err = io.Copy(os.Stdout, tr); err != nil {
+	// 		return 0, errors.Wrap(err, "Payload: Write: Failed to write to stdout")
+	// 	}
+	// 	// for {
+	// 	// 	trs := tar.NewReader(tr)
+	// 	// 	shdr, err := trs.Next()
+	// 	// 	if err == io.EOF {
+	// 	// 		break // Drained sub-tar
+	// 	// 	}
+	// 	// 	if err != nil {
+	// 	// 		return 0, errors.Wrap(err, "Payload: Write: Failed to extract")
+	// 	// 	}
+	// 	// 	fmt.Printf("sub-tar: Name: %s\n", shdr.Name)
+	// 	// 	_, err = io.Copy(ioutil.Discard, trs)
+	// 	// 	if err != nil {
+	// 	// 		return 0, errors.Wrap(err, "Payload: Write: Failed to buffer the update")
+	// 	// 	}
+	// 	// }
+	// }
 }
 
 //     data
@@ -441,12 +462,7 @@ type Data struct {
 }
 
 func (d *Data) Write(b []byte) (n int, err error) {
-	p := PayLoad{}
-	_, err = io.Copy(p, bytes.NewReader(b))
-	if err != nil {
-		return 0, errors.Wrap(err, "Data: Write")
-	}
-	d.payloads = append(d.payloads, p)
+	fmt.Printf("len(b): %d\n", len(b))
 	return len(b), nil
 }
 
@@ -503,7 +519,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Expected version. Got %s", hdr.Name)
 	}
 	if _, err = io.Copy(artifact.Version, tr); err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "Parser: Write: Failed to read version")
 	}
 	fmt.Println("Parsed version")
 	// Expect `manifest`
@@ -574,9 +590,25 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if filepath.Dir(hdr.Name) != "data" {
 		return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(artifact.Data, tr); err != nil {
-		return 0, err
+	fmt.Printf("Data hdr: %s\n", hdr.Name)
+	// Empty tar
+	for {
+		if n, err := io.Copy(ioutil.Discard, tr); err != nil {
+			return int(n), errors.Wrapf(err, "Parser: Failed to empty: Read: %d expected: %d\n", n, hdr.Size)
+			// return len(b), nil
+		}
+		hdr, err = tr.Next()
+		if err == io.EOF {
+			return len(b), nil
+		}
+		if err != nil {
+			return 0, errors.Wrap(err, "Parser: Failed to empty tar")
+		}
 	}
+	// if _, err = io.Copy(ioutil.Discard, tr); err != nil {
+	// 	return 0, errors.Wrap(err, "Parser: Write: ")
+	// }
+	fmt.Println("Done! \\o/")
 	return len(b), nil
 }
 

@@ -53,8 +53,8 @@ func (m *Manifest) Write(b []byte) (n int, err error) {
 	r := bytes.NewBuffer(b)
 	scanner := bufio.NewScanner(r)
 	var line string
-	for scanner.HasNext() {
-		line := scanner.Next()
+	for scanner.Scan() {
+		line = scanner.Text()
 		tmp := strings.Split(line, " ")
 		m.data = append(m.data,
 			ManifestData{
@@ -86,8 +86,8 @@ func (m *ManifestAugment) Write(b []byte) (n int, err error) {
 	br := bytes.NewReader(b)
 	scanner := bufio.NewScanner(br)
 	var line string
-	for scanner.HasNext() {
-		line := scanner.Next()
+	for scanner.Scan() {
+		line = scanner.Text()
 		tmp := strings.Split(line, " ")
 		m.augData = append(m.augData,
 			ManifestData{
@@ -398,14 +398,14 @@ func (d *Data) Write(b []byte) (n int, err error) {
 }
 
 type Artifact struct {
-	Version         Version
-	Manifest        Manifest
-	ManifestSig     ManifestSig
-	ManifestAugment ManifestAugment
-	HeaderTar       HeaderTar
-	HeaderAugment   HeaderAugment
-	HeaderSigned    HeaderSigned
-	Data            Data
+	Version         *Version
+	Manifest        *Manifest
+	ManifestSig     *ManifestSig
+	ManifestAugment *ManifestAugment
+	HeaderTar       *HeaderTar
+	HeaderAugment   *HeaderAugment
+	HeaderSigned    *HeaderSigned
+	Data            *Data
 }
 
 type Parser struct {
@@ -419,9 +419,9 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 		return 0, err
 	}
 	artifact := Artifact{}
-	tr = tar.NewReader(gzr)
+	tr := tar.NewReader(gzr)
 	// Expect `version`
-	hdr, err := tar.Next()
+	hdr, err := tr.Next()
 	if err != nil {
 		return 0, err
 	}
@@ -439,11 +439,11 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if hdr.Name != "manifest" {
 		return 0, fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(artifact.Manifest); err != nil {
+	if _, err = io.Copy(artifact.Manifest, tr); err != nil {
 		return 0, err
 	}
 	// Optional expect `manifest.sig`
-	hdr, err := tar.Next()
+	hdr, err = tr.Next()
 	if err != nil {
 		return 0, err
 	}

@@ -37,6 +37,14 @@ func (v *Version) Write(b []byte) (n int, err error) {
 	return len(b), nil
 }
 
+// Read Creates an artifact Version
+func (v *Version) Read(b []byte) (n int, err error) {
+	if b, err = json.Marshal(v); err != nil {
+		return 0, errors.Wrap(err, "Version: Read: Failed to marshal json")
+	}
+	return len(b), nil
+}
+
 // The signature for the manifest
 // 5ac394718e795d454941487c53d32  data/0000/update.ext4
 // b7793eb1c57c4694532f96383b619  header.tar.gz
@@ -65,6 +73,19 @@ func (m *Manifest) Write(b []byte) (n int, err error) {
 	return len(b), nil
 }
 
+func (m *Manifest) Read(b []byte) (n int, err error) {
+	br := bytes.NewBuffer(nil)
+	for _, manifestData := range m.data {
+		line := manifestData.signature + " " + manifestData.name + "\n"
+		_, err = br.Write([]byte(line))
+		if err != nil {
+			return 0, errors.Wrap(err, "Manifest: Read: Failed to write line")
+		}
+	}
+	b = br.Bytes()
+	return len(b), nil
+}
+
 // Format: base64 encoded ecdsa or rsa signature
 type ManifestSig struct {
 	// More data
@@ -73,6 +94,11 @@ type ManifestSig struct {
 
 func (m *ManifestSig) Write(b []byte) (n int, err error) {
 	m.sig = b
+	return len(b), nil
+}
+
+func (m *ManifestSig) Read(b []byte) (n int, err error) {
+	b = m.sig
 	return len(b), nil
 }
 
@@ -95,6 +121,20 @@ func (m *ManifestAugment) Write(b []byte) (n int, err error) {
 				signature: tmp[0],
 				name:      tmp[1]})
 	}
+	return len(b), nil
+}
+
+func (m *ManifestAugment) Read(b []byte) (n int, err error) {
+	br := bytes.NewBuffer(nil)
+	for _, maugData := range m.augData {
+		line := maugData.signature + " " + maugData.name + "\n"
+		_, err = br.Write([]byte(line))
+		if err != nil {
+			return 0, errors.Wrap(err,
+				"ManifestAugment: Read: Failed to write to byte buffer")
+		}
+	}
+	b = br.Bytes()
 	return len(b), nil
 }
 
@@ -209,6 +249,10 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 	}
 }
 
+func (h *HeaderTar) Read(b []byte) (n int, err error) {
+	return 0, errors.New("Unimplemented")
+}
+
 type Payload struct {
 	Type string `json:"type"`
 }
@@ -236,6 +280,14 @@ func (h HeaderInfo) Write(b []byte) (n int, err error) {
 		return 0, err
 	}
 	fmt.Printf("HeaderInfo: Write: headerInfo: %v\n", h)
+	return len(b), nil
+}
+
+func (h *HeaderInfo) Read(b []byte) (n int, err error) {
+	b, err = json.Marshal(h)
+	if err != nil {
+		return 0, errors.Wrap(err, "HeaderInfo: Read: Failed to marshal json")
+	}
 	return len(b), nil
 }
 
@@ -272,6 +324,10 @@ func (s Scripts) Write(b []byte) (n int, err error) {
 	return len(b), err
 }
 
+func (s Scripts) Read(b []byte) (n int, err error) {
+	return 0, errors.New("Unimplemented")
+}
+
 type TypeInfoProvides struct {
 	RootfsImageChecksum string `json:"rootfs_image_checksum"`
 }
@@ -294,6 +350,14 @@ func (t TypeInfo) Write(b []byte) (n int, err error) {
 	return len(b), err
 }
 
+func (t TypeInfo) Read(b []byte) (n int, err error) {
+	b, err = json.Marshal(&t)
+	if err != nil {
+		return 0, errors.Wrap(err, "TypeInfo: Read: Failed to marshal json")
+	}
+	return len(b), nil
+}
+
 type MetaData struct {
 	// meta-data
 }
@@ -301,6 +365,10 @@ type MetaData struct {
 func (t MetaData) Write(b []byte) (n int, err error) {
 	_, err = io.Copy(ioutil.Discard, bytes.NewReader(b))
 	return len(b), err
+}
+
+func (t MetaData) Read(b []byte) (n int, err error) {
+	return 0, errors.New("Unimplemented")
 }
 
 // Wrapper for all the sub-headers
@@ -319,14 +387,6 @@ type SubHeader struct {
 	name     string
 	typeInfo TypeInfo
 	metaData MetaData
-}
-
-type Headers struct {
-	headers []SubHeader
-}
-
-func (h *Headers) Write(b []byte) (n int, err error) {
-	return 0, errors.New("Unimplemented")
 }
 
 // Another tarball
@@ -391,6 +451,10 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 		}
 		h.subHeaders = append(h.subHeaders, sh)
 	}
+}
+
+func (h *HeaderAugment) Read(b []byte) (n int, err error) {
+	return 0, errors.New("Unimplemented")
 }
 
 type PayLoadData struct {

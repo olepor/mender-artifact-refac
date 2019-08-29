@@ -29,6 +29,13 @@ type Version struct {
 	Version int    `json:"version`
 }
 
+func (v Version) String() string {
+	return fmt.Sprintf("Format:\n\t%s\n"+
+		"Version:\n\t%d\n",
+		v.Format,
+		v.Version)
+}
+
 // Accept the byte body from the tar reader
 func (v *Version) Write(b []byte) (n int, err error) {
 	if err := json.Unmarshal(b, v); err != nil {
@@ -50,12 +57,22 @@ func (v *Version) Read(b []byte) (n int, err error) {
 // b7793eb1c57c4694532f96383b619  header.tar.gz
 // a343fec7ba3b2983c2ecbbb041a35  version
 type ManifestData struct {
-	signature string
-	name      string
+	Signature string
+	Name      string
 }
 
 type Manifest struct {
-	data []ManifestData
+	Data []ManifestData
+}
+
+func (m Manifest) String() string {
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString("Signature:        FileName:\n")
+	for _, data := range m.Data {
+		fmt.Println("data name: " + data.Name)
+		fmt.Fprintf(buf, "%10s\t\t%s\n", data.Signature, data.Name)
+	}
+	return buf.String()
 }
 
 func (m *Manifest) Write(b []byte) (n int, err error) {
@@ -65,18 +82,18 @@ func (m *Manifest) Write(b []byte) (n int, err error) {
 	for scanner.Scan() {
 		line = scanner.Text()
 		tmp := strings.Split(line, " ")
-		m.data = append(m.data,
+		m.Data = append(m.Data,
 			ManifestData{
-				signature: tmp[0],
-				name:      tmp[1]})
+				Signature: tmp[0],
+				Name:      tmp[2]})
 	}
 	return len(b), nil
 }
 
 func (m *Manifest) Read(b []byte) (n int, err error) {
 	br := bytes.NewBuffer(nil)
-	for _, manifestData := range m.data {
-		line := manifestData.signature + " " + manifestData.name + "\n"
+	for _, manifestData := range m.Data {
+		line := manifestData.Signature + " " + manifestData.Name + "\n"
 		_, err = br.Write([]byte(line))
 		if err != nil {
 			return 0, errors.Wrap(err, "Manifest: Read: Failed to write line")
@@ -118,8 +135,8 @@ func (m *ManifestAugment) Write(b []byte) (n int, err error) {
 		tmp := strings.Split(line, " ")
 		m.augData = append(m.augData,
 			ManifestData{
-				signature: tmp[0],
-				name:      tmp[1]})
+				Signature: tmp[0],
+				Name:      tmp[1]})
 	}
 	return len(b), nil
 }
@@ -127,7 +144,7 @@ func (m *ManifestAugment) Write(b []byte) (n int, err error) {
 func (m *ManifestAugment) Read(b []byte) (n int, err error) {
 	br := bytes.NewBuffer(nil)
 	for _, maugData := range m.augData {
-		line := maugData.signature + " " + maugData.name + "\n"
+		line := maugData.Signature + " " + maugData.Name + "\n"
 		_, err = br.Write([]byte(line))
 		if err != nil {
 			return 0, errors.Wrap(err,
@@ -459,42 +476,27 @@ func (h *HeaderAugment) Read(b []byte) (n int, err error) {
 
 type PayLoadData struct {
 	// Give me morez!
-	Name string
-	Data bytes.Buffer
+	Name    string
+	Data    bytes.Buffer
+	OutData io.Reader
+	Update  io.Reader
 }
 
 func (p *PayLoadData) Write(b []byte) (n int, err error) {
-	tr := tar.NewReader(bytes.NewReader(b))
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			return len(b), nil
-		}
-		if err != nil {
-			return 0, errors.Wrap(err, "Payload: Write: Tar failed to produce the next header")
-		}
-		p.Name = hdr.Name
-		fmt.Printf("Payload name: %s\n", hdr.Name)
-		for {
-			trs := tar.NewReader(tr)
-			shdr, err := trs.Next()
-			if err == io.EOF {
-				break // Drained sub-tar
-			}
-			if err != nil {
-				return 0, errors.Wrap(err, "Payload: Write: Failed to extract")
-			}
-			if hdr.Typeflag != tar.TypeDir {
-				fmt.Printf("sub-tar: Name: %s\n", shdr.Name)
-				fmt.Printf("sub-tar: Info: %v\n", shdr)
-				n, err := io.Copy(ioutil.Discard, trs)
-				if err != nil {
-					return 0, errors.Wrapf(err,
-						"Payload: Write: Failed to buffer the update. Written: %d expected: %d", n, shdr.Size)
-				}
-			}
-		}
+	// Wrap the update in a reader to expose it to the outside world
+	p.OutData = bytes.NewBuffer(b)
+	return len(b), nil
+}
+
+func (p *PayLoadData) Read(b []byte) (n int, err error) {
+	// Read from the underlying update files to the payload
+	buf := bytes.NewBuffer(b)
+	_, err = io.Copy(buf, p.Update)
+	if err != nil {
+		return 0, errors.Wrap(err, "PayloadData: Read")
 	}
+	b = buf.Bytes()
+	return len(b), nil
 }
 
 //     data
@@ -530,43 +532,119 @@ func (d *Data) Write(b []byte) (n int, err error) {
 	return len(b), nil
 }
 
+func (d *Data) Read(b []byte) (n int, err error) {
+	// Simply gzip and write the data to make it pretty for the tar-writer
+	buf := bytes.NewBuffer(nil)
+	gzw := gzip.NewWriter(buf)
+	for _, payload := range d.payloads {
+		_, err = io.Copy(gzw, &payload)
+		if err != nil {
+			return 0, errors.Wrap(err, "Data: Read")
+		}
+	}
+	b = buf.Bytes()
+	return len(b), nil
+}
+
 type Artifact struct {
-	Version         *Version
-	Manifest        *Manifest
-	ManifestSig     *ManifestSig
-	ManifestAugment *ManifestAugment
-	HeaderTar       *HeaderTar
-	HeaderAugment   *HeaderAugment
-	HeaderSigned    *HeaderSigned
-	Data            *Data
+	Version         Version
+	Manifest        Manifest
+	ManifestSig     ManifestSig
+	ManifestAugment ManifestAugment
+	HeaderTar       HeaderTar
+	HeaderAugment   HeaderAugment
+	HeaderSigned    HeaderSigned
+	Data            Data
+}
+
+func (a *Artifact) String() string {
+	return fmt.Sprintf("Version:\n\t%s"+
+		"Manifest:\n\t%s"+
+		"ManifestSig:\n\t%s"+
+		"ManifestAugment:\n\t%s"+
+		"HeaderTar:\n\t%s"+
+		"HeaderAugment:\n\t%s"+
+		"HeaderSigned:\n\t%s"+
+		"Data:\n\t%s",
+		a.Version,
+		a.Manifest,
+		a.ManifestSig,
+		a.ManifestAugment,
+		a.HeaderTar,
+		a.HeaderAugment,
+		a.HeaderSigned,
+		a.Data)
 }
 
 // New returns an instantiated basic artifact, ready for parsing
 func New() *Artifact {
 	return &Artifact{
-		Version:         &Version{},
-		Manifest:        &Manifest{},
-		ManifestSig:     &ManifestSig{},
-		ManifestAugment: &ManifestAugment{},
-		HeaderTar: &HeaderTar{
+		Version:         Version{},
+		Manifest:        Manifest{},
+		ManifestSig:     ManifestSig{},
+		ManifestAugment: ManifestAugment{},
+		HeaderTar: HeaderTar{
 			scripts: &Scripts{
 				scriptDir: "/Users/olepor/go/src/github.com/olepor/ma-go/scripts", // TODO - make this configureable
 			},
 		},
-		HeaderAugment: &HeaderAugment{},
-		HeaderSigned:  &HeaderSigned{},
-		Data:          &Data{},
+		HeaderAugment: HeaderAugment{},
+		HeaderSigned:  HeaderSigned{},
+		Data:          Data{},
 	}
 }
 
+// ArtifactReader wraps a reader, and parses it into an artifact
+type ArtifactReader struct {
+	r        io.Reader
+	p        *Parser
+	Artifact Artifact
+}
+
+func NewReader(r io.Reader) (ArtifactReader, error) {
+	p := Parser{}
+	n, err := io.Copy(&p, r)
+	if err != nil {
+		fmt.Printf("Read %d bytes\n", n)
+		return ArtifactReader{Artifact: *p.artifact}, errors.Wrap(err, "Failed to read the artifact headers")
+	}
+	return ArtifactReader{
+		r: r,
+		p: &p,
+		Artifact: Artifact{
+			Version:         Version{},
+			Manifest:        Manifest{},
+			ManifestSig:     ManifestSig{},
+			ManifestAugment: ManifestAugment{},
+			HeaderTar: HeaderTar{
+				scripts: &Scripts{
+					scriptDir: "/Users/olepor/go/src/github.com/olepor/ma-go/scripts", // TODO - make this configureable
+				},
+			},
+			HeaderAugment: HeaderAugment{},
+			HeaderSigned:  HeaderSigned{},
+			Data:          Data{},
+		},
+	}, nil
+}
+
+func (ar *ArtifactReader) Next() (*PayLoadData, error) {
+	return ar.p.Next()
+}
+
+// Parser parses a mender-artifact
 type Parser struct {
 	// The parser
 	// lexer *Lexer
+	artifact *Artifact
+	tr       *tar.Reader
 }
 
+// Write parses an aritfact from the bytes it is fed.
 func (p *Parser) Write(b []byte) (n int, err error) {
 	var compressedReader io.Reader
-	compressedReader, err = gzip.NewReader(bytes.NewBuffer(b))
+	buf := bytes.NewBuffer(b)
+	compressedReader, err = gzip.NewReader(buf)
 	if err != nil {
 		fmt.Println("Failed to open a gzip reader for the artifact")
 		// return 0, err
@@ -582,10 +660,11 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if hdr.Name != "version" {
 		return 0, fmt.Errorf("Expected version. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(artifact.Version, tr); err != nil {
+	if _, err = io.Copy(&artifact.Version, tr); err != nil {
 		return 0, errors.Wrap(err, "Parser: Write: Failed to read version")
 	}
 	fmt.Println("Parsed version")
+	fmt.Println(artifact.Version)
 	// Expect `manifest`
 	hdr, err = tr.Next()
 	if err != nil {
@@ -594,7 +673,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if hdr.Name != "manifest" {
 		return 0, fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(artifact.Manifest, tr); err != nil {
+	if _, err = io.Copy(&artifact.Manifest, tr); err != nil {
 		return 0, err
 	}
 	fmt.Println("Parsed manifest")
@@ -606,7 +685,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	fmt.Printf("hdr.Name: %s\n", hdr.Name)
 	if hdr.Name == "manifest.sig" {
 		fmt.Println("Parsing manifest.sig")
-		if _, err = io.Copy(artifact.ManifestSig, tr); err != nil {
+		if _, err = io.Copy(&artifact.ManifestSig, tr); err != nil {
 			return 0, err
 		}
 		fmt.Println("Parsed manifest.sig")
@@ -616,7 +695,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 			return 0, err
 		}
 		if hdr.Name == "manifest-augment" {
-			if _, err = io.Copy(artifact.ManifestAugment, tr); err != nil {
+			if _, err = io.Copy(&artifact.ManifestAugment, tr); err != nil {
 				return 0, err
 			}
 		}
@@ -630,7 +709,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if hdr.Name != "header.tar.gz" {
 		return 0, fmt.Errorf("Expected `header.tar.gz`. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(artifact.HeaderTar, tr); err != nil {
+	if _, err = io.Copy(&artifact.HeaderTar, tr); err != nil {
 		return 0, err
 	}
 	fmt.Println("Parsed header.tar.gz")
@@ -640,7 +719,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 		return 0, err
 	}
 	if hdr.Name == "header-augment.tar.gz" {
-		if _, err = io.Copy(artifact.HeaderAugment, tr); err != nil {
+		if _, err = io.Copy(&artifact.HeaderAugment, tr); err != nil {
 			return 0, err
 		}
 		fmt.Println("Parsed header-augment")
@@ -649,29 +728,36 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 			return 0, err
 		}
 	}
+	// Need call next on `artifact`
 	// Expect `data`
 	fmt.Println("Ready to read `Data`")
 	if filepath.Dir(hdr.Name) != "data" {
 		return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
 	}
 	fmt.Printf("Data hdr: %s\n", hdr.Name)
-	for {
-		_, err = io.Copy(artifact.Data, tr)
-		if err != nil {
-			return 0, errors.Wrap(err, "Parser: Writer: Failed to read the payload")
-		}
-		hdr, err = tr.Next()
-		if err == io.EOF {
-			return len(b), nil
-		}
-		if err != nil {
-			return 0, errors.Wrap(err, "Parser: Failed to empty tar")
-		}
-	}
-	fmt.Println("Done! \\o/")
-	return len(b), nil
+	fmt.Printf("Read all initial data, preparing to return Payloads\n")
+	// Store the necessary resources
+	p.artifact = artifact
+	p.tr = tr
+	return buf.Len(), nil // TODO -- Which length to return (?)
 }
 
-// func New(lexer *Lexer) *Parser {
-// 	return Parser{lexer}
-// }
+// Next returns the next payload in an artifact
+func (p *Parser) Next() (*PayLoadData, error) {
+	tr := p.tr
+	hdr, err := tr.Next()
+	payload := &PayLoadData{}
+	nr, err := io.Copy(payload, tr)
+	if err != nil {
+		if err == io.EOF {
+			return nil, io.EOF
+		}
+		return nil, errors.Wrap(err, fmt.Sprintf("Parser: Writer: Failed to read the payload: Written: %d, Expected: %d", nr, hdr.Size))
+	}
+	return payload, nil
+}
+
+// Read - Creates an artifact from the underlying artifact struct
+func (p *Parser) Read(b []byte) (n int, err error) {
+	return 0, errors.New("Unimplemented")
+}

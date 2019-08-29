@@ -2,14 +2,12 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/olepor/ma-go/parser"
 )
 
 func main() {
-	p := &parser.Parser{}
 	if len(os.Args) != 2 {
 		fmt.Println("Need a mender-artifact")
 		return
@@ -19,9 +17,11 @@ func main() {
 		fmt.Println("Failed to open the mender-artifact file")
 		return
 	}
-	_, err = io.Copy(p, f)
+	ar, err := parser.NewReader(f)
 	if err != nil {
-		fmt.Printf("error: %s\n", err.Error())
+		fmt.Printf("error: Failed to initialize the artifact reader with: %s\n", err.Error())
+		fmt.Println(ar.Artifact)
 		return
 	}
+	fmt.Println(ar)
 }

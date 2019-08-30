@@ -17,11 +17,13 @@ func main() {
 		fmt.Println("Failed to open the mender-artifact file")
 		return
 	}
-	ar, err := parser.NewReader(f)
+	ar := parser.NewArtifactReader()
+	_, err = ar.Parse(f)
 	if err != nil {
-		fmt.Printf("error: Failed to initialize the artifact reader with: %s\n", err.Error())
-		fmt.Println(ar.Artifact)
+		fmt.Println("Failed to parse the artifact")
+		fmt.Println(err)
 		return
 	}
-	fmt.Println(ar)
+	// fmt.Println(artifact)
+	// fmt.Println(artifact.Manifest)
 }

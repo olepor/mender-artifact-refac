@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/alecthomas/template"
 	"github.com/pkg/errors"
 )
 
@@ -69,7 +70,6 @@ func (m Manifest) String() string {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString("Signature:        FileName:\n")
 	for _, data := range m.Data {
-		fmt.Println("data name: " + data.Name)
 		fmt.Fprintf(buf, "%10s\t\t%s\n", data.Signature, data.Name)
 	}
 	return buf.String()
@@ -107,6 +107,10 @@ func (m *Manifest) Read(b []byte) (n int, err error) {
 type ManifestSig struct {
 	// More data
 	sig []byte
+}
+
+func (m *ManifestSig) String() string {
+	return fmt.Sprintf("Manifest Signature: %x", m.sig)
 }
 
 func (m *ManifestSig) Write(b []byte) (n int, err error) {
@@ -161,6 +165,15 @@ type HeaderTar struct {
 	headers    []SubHeader
 }
 
+func (h HeaderTar) String() string {
+	s := bytes.NewBuffer(nil)
+	s.WriteString("Scripts: " + h.scripts.String())
+	for _, header := range h.headers {
+		s.WriteString(header.String())
+	}
+	return s.String()
+}
+
 // +---header.tar.gz (tar format)
 //      |
 //    	|    +---header-info
@@ -202,39 +215,32 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Unexpected header: %s", hdr.Name)
 	}
 	// Read the header info
-	fmt.Println("Ready to read to header info")
 	if _, err = io.Copy(h.headerInfo, tr); err != nil {
 		return 0, err
 	}
-	fmt.Println("HeaderTar: Read headerInfo")
 	// Read all the scripts
 	for {
 		hdr, err = tr.Next()
 		if err != nil {
 			return 0, err
 		}
-		fmt.Printf("Write script: %s\n", hdr.Name)
 		if filepath.Dir(hdr.Name) == "headers/0000" { //  && atoi(hdr.Name) { TODO -- fixup
-			fmt.Println("Moving on to reading headers...")
 			break // Move on to parsing headers
 		}
 		if filepath.Dir(hdr.Name) != "scripts" {
 			return 0, fmt.Errorf("Expected scripts. Got: %s", hdr.Name)
 		}
-		fmt.Println("scripts.Next")
 		if err = h.scripts.Next(filepath.Base(hdr.Name)); err != nil {
 			return 0, err
 		}
-		fmt.Println("scripts.Write")
 		if _, err = io.Copy(h.scripts, tr); err != nil {
 			fmt.Println("Scripts copy... err")
 			return 0, err
 		}
-
 	}
-	fmt.Println("Finished reading scripts...")
 	// Read all the headers
 	for {
+		fmt.Println("Reading all the subheaders")
 		// hdr.Name is already set, as we broke out of the script parsing loop
 		if filepath.Base(hdr.Name) != "type-info" {
 			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
@@ -246,6 +252,8 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 		hdr, err = tr.Next()
 		// Finished reading `header.tar.gz`
 		if err == io.EOF {
+			fmt.Printf("subHeader read (EOF): %s\n", sh.String())
+			fmt.Println(sh.typeInfo)
 			h.headers = append(h.headers, sh)
 			return len(b), nil
 		}
@@ -262,6 +270,7 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 				return 0, errors.Wrap(err, "HeaderTar: failed to get next header")
 			}
 		}
+		fmt.Printf("subHeader read: %s\n", sh.String())
 		h.headers = append(h.headers, sh)
 	}
 }
@@ -274,14 +283,26 @@ type Payload struct {
 	Type string `json:"type"`
 }
 
+func (p Payload) String() string {
+	return p.Type
+}
+
 type ArtifactProvides struct {
 	ArtifactName  string `json:"artifact_name"`
 	ArtifactGroup string `json:"artifact_group"`
 }
 
+func (a ArtifactProvides) String() string {
+	return fmt.Sprintf("ArtifactName: %s\nArtifactGroup:%s\n", a.ArtifactName, a.ArtifactGroup)
+}
+
 type ArtifactDepends struct {
 	ArtifactName []string `json:"artifact_name"`
 	DeviceType   []string `json:"device_type"`
+}
+
+func (a ArtifactDepends) String() string {
+	return fmt.Sprintf("ArtifactName: %s\nDeviceType:%s\n", a.ArtifactName, a.DeviceType)
 }
 
 type HeaderInfo struct {
@@ -291,12 +312,21 @@ type HeaderInfo struct {
 	ArtifactDepends  ArtifactDepends  `json:"artifact_depends"`
 }
 
+func (h HeaderInfo) String() string {
+	buf := bytes.NewBuffer(nil)
+	for _, payload := range h.Payloads {
+		fmt.Fprintf(buf, "Payload: %s\n", payload.String())
+	}
+	fmt.Fprintf(buf, "ArtifactProvides:\n\t%s", h.ArtifactProvides)
+	fmt.Fprintf(buf, "ArtifactDepends:\n\t%s", h.ArtifactProvides)
+	return buf.String()
+}
+
 func (h HeaderInfo) Write(b []byte) (n int, err error) {
 	err = json.Unmarshal(b, &h)
 	if err != nil {
 		return 0, err
 	}
-	fmt.Printf("HeaderInfo: Write: headerInfo: %v\n", h)
 	return len(b), nil
 }
 
@@ -317,23 +347,31 @@ type Scripts struct {
 	scriptDir         string // configureable
 	currentScriptName string
 	file              *os.File
+	names             []string
+}
+
+func (s *Scripts) String() string {
+	buf := bytes.NewBuffer(nil)
+	for _, name := range s.names {
+		fmt.Fprintf(buf, "\n\t%s", name)
+	}
+	fmt.Fprintln(buf)
+	return buf.String()
 }
 
 func (s *Scripts) Next(filename string) error {
-	fmt.Printf("Scripts Next .\n")
 	f, err := os.Create(filepath.Join(s.scriptDir, filename))
 	if err != nil {
-		fmt.Printf("Scripts: Next, error: %s\n", err.Error())
 		return err
 	}
 	s.file = f
+	s.names = append(s.names, filepath.Join(s.scriptDir, filename))
 	return nil
 }
 
 // The scripts Write reads a file from the byte stream
 // and writes it to /scripts/<ScriptName>
 func (s Scripts) Write(b []byte) (n int, err error) {
-	fmt.Println("Scripts Write function")
 	if s.file == nil {
 		return 0, fmt.Errorf("Next must be called, prior to writing a script")
 	}
@@ -359,6 +397,21 @@ type TypeInfo struct {
 	TypeInfoDepends  TypeInfoDepends  `json:"artifact_depends"`
 }
 
+func (t TypeInfo) String() string {
+	typeinfotmplstr := `{{ if .Type}} {{ printf "%s" .Type }} {{ end }}
+{{ if .TypeInfoProvides}} {{ printf "%s" .TypeInfoProvides }} {{ end }}
+{{ if .TypeInfoDepends}} {{ printf "%s" .TypeInfoDepends }} {{ end }}`
+	typeinfotmpl, err := template.New("master").Parse(typeinfotmplstr)
+	if err != nil {
+		panic("Failed to create the template for TypeInfo")
+	}
+	buf := bytes.NewBuffer(nil)
+	if err := typeinfotmpl.Execute(buf, t); err != nil {
+		panic("Failed to write the template for TypeInfo")
+	}
+	return buf.String()
+}
+
 func (t TypeInfo) Write(b []byte) (n int, err error) {
 	err = json.Unmarshal(b, &t)
 	if err != nil {
@@ -377,6 +430,10 @@ func (t TypeInfo) Read(b []byte) (n int, err error) {
 
 type MetaData struct {
 	// meta-data
+}
+
+func (m MetaData) String() string {
+	return ""
 }
 
 func (t MetaData) Write(b []byte) (n int, err error) {
@@ -404,6 +461,10 @@ type SubHeader struct {
 	name     string
 	typeInfo TypeInfo
 	metaData MetaData
+}
+
+func (s *SubHeader) String() string {
+	return fmt.Sprintf("Name: %s\nTypeInfo: %s\nMetaData: %s\n", s.name, s.typeInfo, s.metaData)
 }
 
 // Another tarball
@@ -601,31 +662,29 @@ type ArtifactReader struct {
 	Artifact Artifact
 }
 
-func NewReader(r io.Reader) (ArtifactReader, error) {
+func NewArtifactReader() *ArtifactReader {
+	return &ArtifactReader{}
+}
+
+func (a *ArtifactReader) Parse(r io.Reader) (ar *Artifact, err error) {
 	p := Parser{}
-	n, err := io.Copy(&p, r)
-	if err != nil {
-		fmt.Printf("Read %d bytes\n", n)
-		return ArtifactReader{Artifact: *p.artifact}, errors.Wrap(err, "Failed to read the artifact headers")
-	}
-	return ArtifactReader{
-		r: r,
-		p: &p,
-		Artifact: Artifact{
-			Version:         Version{},
-			Manifest:        Manifest{},
-			ManifestSig:     ManifestSig{},
-			ManifestAugment: ManifestAugment{},
-			HeaderTar: HeaderTar{
-				scripts: &Scripts{
-					scriptDir: "/Users/olepor/go/src/github.com/olepor/ma-go/scripts", // TODO - make this configureable
-				},
-			},
-			HeaderAugment: HeaderAugment{},
-			HeaderSigned:  HeaderSigned{},
-			Data:          Data{},
-		},
-	}, nil
+	io.Copy(&p, r)
+
+	return &p.artifact, nil
+	// return &Artifact{
+	// 	Version:         Version{},
+	// 	Manifest:        Manifest{},
+	// 	ManifestSig:     ManifestSig{},
+	// 	ManifestAugment: ManifestAugment{},
+	// 	HeaderTar: HeaderTar{
+	// 		scripts: &Scripts{
+	// 			scriptDir: "/Users/olepor/go/src/github.com/olepor/ma-go/scripts", // TODO - make this configureable
+	// 		},
+	// 	},
+	// 	HeaderAugment: HeaderAugment{},
+	// 	HeaderSigned:  HeaderSigned{},
+	// 	Data:          Data{},
+	// }, nil
 }
 
 func (ar *ArtifactReader) Next() (*PayLoadData, error) {
@@ -636,7 +695,7 @@ func (ar *ArtifactReader) Next() (*PayLoadData, error) {
 type Parser struct {
 	// The parser
 	// lexer *Lexer
-	artifact *Artifact
+	artifact Artifact
 	tr       *tar.Reader
 }
 
@@ -677,6 +736,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 		return 0, err
 	}
 	fmt.Println("Parsed manifest")
+	fmt.Println(artifact.Manifest)
 	// Optional expect `manifest.sig`
 	hdr, err = tr.Next()
 	if err != nil {
@@ -689,6 +749,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 			return 0, err
 		}
 		fmt.Println("Parsed manifest.sig")
+		fmt.Println(artifact.ManifestSig)
 		// Optional expect `manifest-augment`
 		hdr, err = tr.Next()
 		if err != nil {
@@ -713,6 +774,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 		return 0, err
 	}
 	fmt.Println("Parsed header.tar.gz")
+	fmt.Println(artifact.HeaderTar)
 	// Optional `header-augment.tar.gz`
 	hdr, err = tr.Next()
 	if err != nil {
@@ -730,15 +792,15 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	}
 	// Need call next on `artifact`
 	// Expect `data`
-	fmt.Println("Ready to read `Data`")
-	if filepath.Dir(hdr.Name) != "data" {
-		return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
-	}
-	fmt.Printf("Data hdr: %s\n", hdr.Name)
-	fmt.Printf("Read all initial data, preparing to return Payloads\n")
-	// Store the necessary resources
-	p.artifact = artifact
-	p.tr = tr
+	// fmt.Println("Ready to read `Data`")
+	// if filepath.Dir(hdr.Name) != "data" {
+	// 	return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
+	// }
+	// fmt.Printf("Data hdr: %s\n", hdr.Name)
+	// fmt.Printf("Read all initial data, preparing to return Payloads\n")
+	// // Store the necessary resources
+	// p.artifact = artifact
+	// p.tr = tr
 	return buf.Len(), nil // TODO -- Which length to return (?)
 }
 

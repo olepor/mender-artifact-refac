@@ -266,61 +266,61 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 			return err
 		}
 		if _, err = io.Copy(h.scripts, tarElement); err != nil {
-			fmt.Println("Scripts copy... err")
+			log.Trace("Scripts copy... err")
 			return err
 		}
 	}
 	// Read all the headers
 	for {
-		fmt.Println("Reading all the subheaders")
+		log.Trace("Reading all the subheaders")
 		// hdr.Name is already set, as we broke out of the script parsing loop
 		if filepath.Base(hdr.Name) != "type-info" {
 			return fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
 		}
-		fmt.Println("Reading type-info")
+		log.Trace("Reading type-info")
 		sh := SubHeader{}
 		if _, err = io.Copy(sh.typeInfo, tarElement); err != nil {
 			return errors.Wrap(err, "HeaderTar")
 		}
 		hdr, err = tarElement.Next()
-		fmt.Println("Reading next..")
-		fmt.Println(hdr, err)
+		log.Trace("Reading next..")
+		log.Trace(hdr, err)
 		// Finished reading `header.tar.gz`
 		if err == io.EOF {
-			fmt.Printf("subHeader read (EOF): %s\n", sh.String())
-			fmt.Println(sh.typeInfo)
+			log.Trace("subHeader read (EOF): %s\n", sh.String())
+			log.Trace(sh.typeInfo)
 			h.headers = append(h.headers, sh)
 			return nil
 		}
 		if err != nil {
 			return errors.Wrap(err, "HeaderTar: failed to next hdr")
 		}
-		fmt.Println(hdr.Name)
+		log.Trace(hdr.Name)
 		if filepath.Base(hdr.Name) == "meta-data" {
 			_, err = io.Copy(sh.metaData, tarElement)
-			fmt.Println("Read meta-data")
+			log.Trace("Read meta-data")
 			if err != nil {
 				return errors.Wrap(err, "HeaderTar: meta-data copy error")
 			}
 			hdr, err = tarElement.Next()
-			fmt.Println("After meta-data")
-			fmt.Println(hdr)
-			fmt.Println(err)
-			fmt.Println()
+			log.Trace("After meta-data")
+			log.Trace(hdr)
+			log.Trace(err)
+			log.Trace()
 			if err == io.EOF {
-				fmt.Println("EOF after parsing meta-data in header")
+				log.Trace("EOF after parsing meta-data in header, breaking out")
 				break
 			} else if err != nil {
 				return errors.Wrap(err, "HeaderTar: failed to get next header")
 			}
 		}
-		fmt.Printf("subHeader read: %s\n", sh.String())
+		log.Trace("subHeader read: %s\n", sh.String())
 		h.headers = append(h.headers, sh)
 	}
 
 	// Extract the checksum from buf
 	h.shaSum = sha.Sum(nil)
-	fmt.Printf("Header.tar.gz - shasum: %x\n", h.shaSum)
+	log.Trace("Header.tar.gz - shasum: %x\n", h.shaSum)
 	return nil
 }
 
@@ -630,7 +630,7 @@ type Data struct {
 }
 
 func (d *Data) Write(b []byte) (n int, err error) {
-	fmt.Printf("len(b): %d\n", len(b))
+	log.Trace("len(b): %d\n", len(b))
 	gzipr, err := gzip.NewReader(bytes.NewReader(b))
 	if err != nil {
 		return 0, errors.Wrap(err, "Data: Write: Failed to unzip the Payload")
@@ -775,8 +775,8 @@ func (p *Parser) Parse(r io.Reader) error {
 		return errors.Wrap(err, "Parser: Write: Failed to read version")
 	}
 	artifact.Version.shaSum = sha.Sum(nil)
-	fmt.Println("Parsed version")
-	fmt.Println(artifact.Version)
+	log.Trace("Parsed version")
+	log.Trace(artifact.Version)
 	// Expect `manifest`
 	hdr, err = tarElement.Next()
 	if err != nil {
@@ -788,21 +788,21 @@ func (p *Parser) Parse(r io.Reader) error {
 	if _, err = io.Copy(&artifact.Manifest, tarElement); err != nil {
 		return err
 	}
-	fmt.Println("Parsed manifest")
-	fmt.Println(artifact.Manifest)
+	log.Trace("Parsed manifest")
+	log.Trace(artifact.Manifest)
 	// Optional expect `manifest.sig`
 	hdr, err = tarElement.Next()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("hdr.Name: %s\n", hdr.Name)
+	log.Trace("hdr.Name: %s\n", hdr.Name)
 	if hdr.Name == "manifest.sig" {
-		fmt.Println("Parsing manifest.sig")
+		log.Trace("Parsing manifest.sig")
 		if _, err = io.Copy(&artifact.ManifestSig, tarElement); err != nil {
 			return err
 		}
-		fmt.Println("Parsed manifest.sig")
-		fmt.Println(artifact.ManifestSig)
+		log.Trace("Parsed manifest.sig")
+		log.Trace(artifact.ManifestSig)
 		// Optional expect `manifest-augment`
 		hdr, err = tarElement.Next()
 		if err != nil {
@@ -813,7 +813,7 @@ func (p *Parser) Parse(r io.Reader) error {
 				return err
 			}
 		}
-		fmt.Println("Parsed manifest-augment")
+		log.Trace("Parsed manifest-augment")
 		hdr, err = tarElement.Next()
 		if err != nil {
 			return err
@@ -824,12 +824,12 @@ func (p *Parser) Parse(r io.Reader) error {
 		return fmt.Errorf("Expected `header.tar.gz`. Got %s", hdr.Name)
 	}
 	if err = artifact.HeaderTar.Parse(tarElement); err != nil {
-		fmt.Println("Error parsing header.tar.gz")
-		fmt.Println(err)
+		log.Trace("Error parsing header.tar.gz")
+		log.Trace(err)
 		return err
 	}
-	fmt.Println("Parsed header.tar.gz")
-	fmt.Println(artifact.HeaderTar)
+	log.Trace("Parsed header.tar.gz")
+	log.Trace(artifact.HeaderTar)
 	// Optional `header-augment.tar.gz`
 	hdr, err = tarElement.Next()
 	if err != nil {
@@ -839,7 +839,7 @@ func (p *Parser) Parse(r io.Reader) error {
 		if _, err = io.Copy(&artifact.HeaderAugment, tarElement); err != nil {
 			return err
 		}
-		fmt.Println("Parsed header-augment")
+		log.Trace("Parsed header-augment")
 		hdr, err = tarElement.Next()
 		if err != nil {
 			return err
@@ -847,12 +847,12 @@ func (p *Parser) Parse(r io.Reader) error {
 	}
 	// Need call next on `artifact`
 	// Expect `data`
-	fmt.Println("Ready to read `Data`")
+	log.Trace("Ready to read `Data`")
 	if filepath.Dir(hdr.Name) != "data" {
 		return fmt.Errorf("Expected `data`. Got %s", hdr.Name)
 	}
-	fmt.Printf("Data hdr: %s\n", hdr.Name)
-	fmt.Printf("Read all initial data, preparing to return Payloads\n")
+	log.Trace("Data hdr: %s\n", hdr.Name)
+	log.Trace("Read all initial data, preparing to return Payloads\n")
 
 	return nil
 }
@@ -874,7 +874,7 @@ func (p *Parser) Next() (io.Reader, error) {
 	// Unzip the data/0000.tar.gz file
 	compressedReader, err := gzip.NewReader(p.tarElement)
 	if err != nil {
-		fmt.Println("Failed to open a gzip reader for the artifact")
+		log.Trace("Failed to open a gzip reader for the artifact")
 		// return 0, err
 		return nil, err
 	}
@@ -884,8 +884,8 @@ func (p *Parser) Next() (io.Reader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Failed to get the tar info in 'data/0000.tar', Error: %v", err)
 	}
-	fmt.Println("Payload name: ")
-	fmt.Println(hdr.Name)
+	log.Trace("Payload name: ")
+	log.Trace(hdr.Name)
 	// Write the payload to stdout
 	// io.Copy(os.Stdout, pr)
 	return pr, nil

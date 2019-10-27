@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"crypto/sha256"
 	"github.com/pkg/errors"
 	"text/template"
+	"io/ioutil"
 )
 
 ///////////////////////////////////////////////
@@ -173,6 +173,7 @@ type HeaderTar struct {
 	headerInfo HeaderInfo
 	scripts    *Scripts
 	headers    []SubHeader
+	shaSum     []byte
 }
 
 func (h HeaderTar) String() string {
@@ -208,44 +209,46 @@ func (h HeaderTar) String() string {
 //    	|         |    `---<more headers>
 //             |
 //             `---000n ...
-func (h *HeaderTar) Write(b []byte) (n int, err error) {
+func (h *HeaderTar) Parse(r io.Reader) error {
 	// The input is gzipped and tarred, so embed the two
 	// readers around the byte stream
 	// First wrap the gzip writer
-	zr, err := gzip.NewReader(bytes.NewBuffer(b))
+	sha := sha256.New()
+	teeReader := io.TeeReader(r, sha)
+	zr, err := gzip.NewReader(teeReader)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	tr := tar.NewReader(zr)
-	hdr, err := tr.Next()
+	tarElement := tar.NewReader(zr)
+	hdr, err := tarElement.Next()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if hdr.Name != "header-info" {
-		return 0, fmt.Errorf("Unexpected header: %s", hdr.Name)
+		return fmt.Errorf("Unexpected header: %s", hdr.Name)
 	}
 	// Read the header info
-	if _, err = io.Copy(h.headerInfo, tr); err != nil {
-		return 0, err
+	if _, err = io.Copy(h.headerInfo, tarElement); err != nil {
+		return err
 	}
 	// Read all the scripts
 	for {
-		hdr, err = tr.Next()
+		hdr, err = tarElement.Next()
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if filepath.Dir(hdr.Name) == "headers/0000" { //  && atoi(hdr.Name) { TODO -- fixup
 			break // Move on to parsing headers
 		}
 		if filepath.Dir(hdr.Name) != "scripts" {
-			return 0, fmt.Errorf("Expected scripts. Got: %s", hdr.Name)
+			return fmt.Errorf("Expected scripts. Got: %s", hdr.Name)
 		}
 		if err = h.scripts.Next(filepath.Base(hdr.Name)); err != nil {
-			return 0, err
+			return err
 		}
-		if _, err = io.Copy(h.scripts, tr); err != nil {
+		if _, err = io.Copy(h.scripts, tarElement); err != nil {
 			fmt.Println("Scripts copy... err")
-			return 0, err
+			return err
 		}
 	}
 	// Read all the headers
@@ -253,14 +256,14 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 		fmt.Println("Reading all the subheaders")
 		// hdr.Name is already set, as we broke out of the script parsing loop
 		if filepath.Base(hdr.Name) != "type-info" {
-			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
+			return fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
 		}
 		fmt.Println("Reading type-info")
 		sh := SubHeader{}
-		if _, err = io.Copy(sh.typeInfo, tr); err != nil {
-			return 0, errors.Wrap(err, "HeaderTar")
+		if _, err = io.Copy(sh.typeInfo, tarElement); err != nil {
+			return errors.Wrap(err, "HeaderTar")
 		}
-		hdr, err = tr.Next()
+		hdr, err = tarElement.Next()
 		fmt.Println("Reading next..")
 		fmt.Println(hdr, err)
 		// Finished reading `header.tar.gz`
@@ -268,19 +271,19 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 			fmt.Printf("subHeader read (EOF): %s\n", sh.String())
 			fmt.Println(sh.typeInfo)
 			h.headers = append(h.headers, sh)
-			return len(b), nil
+			return nil
 		}
 		if err != nil {
-			return 0, errors.Wrap(err, "HeaderTar: failed to next hdr")
+			return errors.Wrap(err, "HeaderTar: failed to next hdr")
 		}
 		fmt.Println(hdr.Name)
 		if filepath.Base(hdr.Name) == "meta-data" {
-			_, err = io.Copy(sh.metaData, tr)
+			_, err = io.Copy(sh.metaData, tarElement)
 			fmt.Println("Read meta-data")
 			if err != nil {
-				return 0, errors.Wrap(err, "HeaderTar: meta-data copy error")
+				return errors.Wrap(err, "HeaderTar: meta-data copy error")
 			}
-			hdr, err = tr.Next()
+			hdr, err = tarElement.Next()
 			fmt.Println("After meta-data")
 			fmt.Println(hdr)
 			fmt.Println(err)
@@ -289,14 +292,17 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 				fmt.Println("EOF after parsing meta-data in header")
 				break
 			} else if err != nil {
-				return 0, errors.Wrap(err, "HeaderTar: failed to get next header")
+				return errors.Wrap(err, "HeaderTar: failed to get next header")
 			}
 		}
 		fmt.Printf("subHeader read: %s\n", sh.String())
 		h.headers = append(h.headers, sh)
 	}
 
-	return len(b), nil
+	// Extract the checksum from buf
+	h.shaSum = sha.Sum(nil)
+	fmt.Printf("Header.tar.gz - shasum: %x\n", h.shaSum)
+	return err
 }
 
 func (h *HeaderTar) Read(b []byte) (n int, err error) {
@@ -515,8 +521,8 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	tr := tar.NewReader(zr)
-	hdr, err := tr.Next()
+	tarElement := tar.NewReader(zr)
+	hdr, err := tarElement.Next()
 	if err != nil {
 		return 0, err
 	}
@@ -524,7 +530,7 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Unexpected header: %s", hdr.Name)
 	}
 	// Read the header info
-	if _, err = io.Copy(h.headerInfo, tr); err != nil {
+	if _, err = io.Copy(h.headerInfo, tarElement); err != nil {
 		return 0, nil
 	}
 	// Read all the headers
@@ -534,19 +540,19 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
 		}
 		sh := SubHeader{}
-		if _, err = io.Copy(sh.typeInfo, tr); err != nil {
+		if _, err = io.Copy(sh.typeInfo, tarElement); err != nil {
 			return 0, err
 		}
-		hdr, err = tr.Next()
+		hdr, err = tarElement.Next()
 		if err != nil {
 			return 0, err
 		}
 		if filepath.Base(hdr.Name) == "meta-data" {
-			_, err = io.Copy(sh.metaData, tr)
+			_, err = io.Copy(sh.metaData, tarElement)
 			if err != nil {
 				return 0, err
 			}
-			hdr, err = tr.Next()
+			hdr, err = tarElement.Next()
 			if err != nil {
 				return 0, err
 			}
@@ -664,8 +670,7 @@ func (a *Artifact) String() string {
 // New returns an instantiated basic artifact, ready for parsing
 func New() *Artifact {
 	return &Artifact{
-		Version: Version{
-		},
+		Version:         Version{},
 		Manifest:        Manifest{},
 		ManifestSig:     ManifestSig{},
 		ManifestAugment: ManifestAugment{},
@@ -720,8 +725,8 @@ func (ar *ArtifactReader) Next() (*PayLoadData, error) {
 type Parser struct {
 	// The parser
 	// lexer *Lexer
-	artifact Artifact
-	tr       *tar.Reader
+	artifact   Artifact
+	tarElement *tar.Reader
 }
 
 // Write parses an aritfact from the bytes it is fed.
@@ -735,9 +740,9 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 		compressedReader = bytes.NewReader(b) // Let's try N see if it is not compressed
 	}
 	artifact := New()
-	tr := tar.NewReader(compressedReader)
+	tarElement := tar.NewReader(compressedReader)
 	// Expect `version`
-	hdr, err := tr.Next()
+	hdr, err := tarElement.Next()
 	if err != nil {
 		return 0, err
 	}
@@ -746,50 +751,50 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	}
 	sha := sha256.New()
 	mw := io.MultiWriter(&artifact.Version, sha)
-	if _, err = io.Copy(mw, tr); err != nil {
+	if _, err = io.Copy(mw, tarElement); err != nil {
 		return 0, errors.Wrap(err, "Parser: Write: Failed to read version")
 	}
 	artifact.Version.shaSum = sha.Sum(nil)
 	fmt.Println("Parsed version")
 	fmt.Println(artifact.Version)
 	// Expect `manifest`
-	hdr, err = tr.Next()
+	hdr, err = tarElement.Next()
 	if err != nil {
 		return 0, err
 	}
 	if hdr.Name != "manifest" {
 		return 0, fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(&artifact.Manifest, tr); err != nil {
+	if _, err = io.Copy(&artifact.Manifest, tarElement); err != nil {
 		return 0, err
 	}
 	fmt.Println("Parsed manifest")
 	fmt.Println(artifact.Manifest)
 	// Optional expect `manifest.sig`
-	hdr, err = tr.Next()
+	hdr, err = tarElement.Next()
 	if err != nil {
 		return 0, err
 	}
 	fmt.Printf("hdr.Name: %s\n", hdr.Name)
 	if hdr.Name == "manifest.sig" {
 		fmt.Println("Parsing manifest.sig")
-		if _, err = io.Copy(&artifact.ManifestSig, tr); err != nil {
+		if _, err = io.Copy(&artifact.ManifestSig, tarElement); err != nil {
 			return 0, err
 		}
 		fmt.Println("Parsed manifest.sig")
 		fmt.Println(artifact.ManifestSig)
 		// Optional expect `manifest-augment`
-		hdr, err = tr.Next()
+		hdr, err = tarElement.Next()
 		if err != nil {
 			return 0, err
 		}
 		if hdr.Name == "manifest-augment" {
-			if _, err = io.Copy(&artifact.ManifestAugment, tr); err != nil {
+			if _, err = io.Copy(&artifact.ManifestAugment, tarElement); err != nil {
 				return 0, err
 			}
 		}
 		fmt.Println("Parsed manifest-augment")
-		hdr, err = tr.Next()
+		hdr, err = tarElement.Next()
 		if err != nil {
 			return 0, err
 		}
@@ -798,22 +803,22 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if hdr.Name != "header.tar.gz" {
 		return 0, fmt.Errorf("Expected `header.tar.gz`. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(&artifact.HeaderTar, tr); err != nil {
+	if err = artifact.HeaderTar.Parse(tarElement); err != nil {
 		return 0, err
 	}
 	fmt.Println("Parsed header.tar.gz")
 	fmt.Println(artifact.HeaderTar)
 	// Optional `header-augment.tar.gz`
-	hdr, err = tr.Next()
+	hdr, err = tarElement.Next()
 	if err != nil {
 		return 0, err
 	}
 	if hdr.Name == "header-augment.tar.gz" {
-		if _, err = io.Copy(&artifact.HeaderAugment, tr); err != nil {
+		if _, err = io.Copy(&artifact.HeaderAugment, tarElement); err != nil {
 			return 0, err
 		}
 		fmt.Println("Parsed header-augment")
-		hdr, err = tr.Next()
+		hdr, err = tarElement.Next()
 		if err != nil {
 			return 0, err
 		}
@@ -829,7 +834,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	// Unzip the data/0000.tar.gz file
 
 	// data/0000.tar
-	compressedReader, err = gzip.NewReader(tr)
+	compressedReader, err = gzip.NewReader(tarElement)
 	if err != nil {
 		fmt.Println("Failed to open a gzip reader for the artifact")
 		// return 0, err
@@ -852,10 +857,10 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 
 // Next returns the next payload in an artifact
 func (p *Parser) Next() (*PayLoadData, error) {
-	tr := p.tr
-	hdr, err := tr.Next()
+	tarElement := p.tarElement
+	hdr, err := tarElement.Next()
 	payload := &PayLoadData{}
-	nr, err := io.Copy(payload, tr)
+	nr, err := io.Copy(payload, tarElement)
 	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF

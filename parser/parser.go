@@ -21,8 +21,8 @@ import (
 
 	"crypto/sha256"
 	"github.com/pkg/errors"
-	"text/template"
 	"io/ioutil"
+	"text/template"
 )
 
 ///////////////////////////////////////////////
@@ -422,7 +422,7 @@ type TypeInfoDepends struct {
 }
 
 type TypeInfo struct {
-	Type             string           `json"type"`
+	Type             string           `json:"type"`
 	TypeInfoProvides TypeInfoProvides `json:"artifact_provides"`
 	TypeInfoDepends  TypeInfoDepends  `json:"artifact_depends"`
 }

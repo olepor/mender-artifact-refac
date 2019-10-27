@@ -1,5 +1,12 @@
 package parser
 
+// TODO's
+//
+// * Get the checksum whilst parsing the Artifact
+// * Get the signature whilst parsing the Artifact
+// * Decide upon a structure, and API for moving out of POC
+//
+
 import (
 	"archive/tar"
 	"bufio"
@@ -13,8 +20,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"text/template"
+	"crypto/sha256"
 	"github.com/pkg/errors"
+	"text/template"
 )
 
 ///////////////////////////////////////////////
@@ -27,19 +35,21 @@ import (
 // }
 type Version struct {
 	Format  string `json:"format"`
-	Version int    `json:"version`
+	Version int    `json:"version"`
+	shaSum  []byte
 }
 
 func (v Version) String() string {
 	return fmt.Sprintf("Format:\n\t%s\n"+
-		"Version:\n\t%d\n",
+		"Version:\n\t%d\nsha:%x\n",
 		v.Format,
-		v.Version)
+		v.Version,
+		v.shaSum)
 }
 
 // Accept the byte body from the tar reader
 func (v *Version) Write(b []byte) (n int, err error) {
-	if err := json.Unmarshal(b, v); err != nil {
+	if err = json.Unmarshal(b, v); err != nil {
 		return 0, err
 	}
 	return len(b), nil
@@ -654,7 +664,8 @@ func (a *Artifact) String() string {
 // New returns an instantiated basic artifact, ready for parsing
 func New() *Artifact {
 	return &Artifact{
-		Version:         Version{},
+		Version: Version{
+		},
 		Manifest:        Manifest{},
 		ManifestSig:     ManifestSig{},
 		ManifestAugment: ManifestAugment{},
@@ -733,9 +744,12 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	if hdr.Name != "version" {
 		return 0, fmt.Errorf("Expected version. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(&artifact.Version, tr); err != nil {
+	sha := sha256.New()
+	mw := io.MultiWriter(&artifact.Version, sha)
+	if _, err = io.Copy(mw, tr); err != nil {
 		return 0, errors.Wrap(err, "Parser: Write: Failed to read version")
 	}
+	artifact.Version.shaSum = sha.Sum(nil)
 	fmt.Println("Parsed version")
 	fmt.Println(artifact.Version)
 	// Expect `manifest`
@@ -831,8 +845,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	fmt.Println("Payload name: ")
 	fmt.Println(hdr.Name)
 	// Write the payload to stdout
-	io.Copy(os.Stdout, pr)
-
+	// io.Copy(os.Stdout, pr)
 
 	return buf.Len(), nil // TODO -- Which length to return (?)
 }

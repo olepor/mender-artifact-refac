@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/olepor/mender-artifact-refac/parser"
+	"io"
 )
 
 func main() {
@@ -24,7 +25,10 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	ar.Next()
-	// fmt.Println(artifact)
-	// fmt.Println(artifact.Manifest)
+	r, err := ar.Next()
+	if err != nil {
+		fmt.Println("Failed to get the payload")
+		os.Exit(1)
+	}
+	io.Copy(os.Stdout, r)
 }

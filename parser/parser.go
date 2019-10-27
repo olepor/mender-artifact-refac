@@ -698,7 +698,10 @@ func NewArtifactReader() *ArtifactReader {
 
 func (a *ArtifactReader) Parse(r io.Reader) (ar *Artifact, err error) {
 	p := Parser{}
-	io.Copy(&p, r)
+	err = p.Parse(r)
+	if err != nil {
+		return nil, err
+	}
 	a.p = &p
 	a.Artifact = p.artifact
 
@@ -733,30 +736,22 @@ type Parser struct {
 
 // Write parses an aritfact from the bytes it is fed.
 // TODO -- Change to parse method
-func (p *Parser) Write(b []byte) (n int, err error) {
-	var compressedReader io.Reader
-	buf := bytes.NewBuffer(b)
-	compressedReader, err = gzip.NewReader(buf)
-	if err != nil {
-		fmt.Println("Failed to open a gzip reader for the artifact")
-		// return 0, err
-		compressedReader = bytes.NewReader(b) // Let's try N see if it is not compressed
-	}
+func (p *Parser) Parse(r io.Reader) error {
 	artifact := New()
-	tarElement := tar.NewReader(compressedReader)
+	tarElement := tar.NewReader(r)
 	p.tarElement = tarElement
 	// Expect `version`
 	hdr, err := tarElement.Next()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if hdr.Name != "version" {
-		return 0, fmt.Errorf("Expected version. Got %s", hdr.Name)
+		return fmt.Errorf("Expected version. Got %s", hdr.Name)
 	}
 	sha := sha256.New()
 	mw := io.MultiWriter(&artifact.Version, sha)
 	if _, err = io.Copy(mw, tarElement); err != nil {
-		return 0, errors.Wrap(err, "Parser: Write: Failed to read version")
+		return errors.Wrap(err, "Parser: Write: Failed to read version")
 	}
 	artifact.Version.shaSum = sha.Sum(nil)
 	fmt.Println("Parsed version")
@@ -764,86 +759,97 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	// Expect `manifest`
 	hdr, err = tarElement.Next()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if hdr.Name != "manifest" {
-		return 0, fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
+		return fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
 	}
 	if _, err = io.Copy(&artifact.Manifest, tarElement); err != nil {
-		return 0, err
+		return err
 	}
 	fmt.Println("Parsed manifest")
 	fmt.Println(artifact.Manifest)
 	// Optional expect `manifest.sig`
 	hdr, err = tarElement.Next()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	fmt.Printf("hdr.Name: %s\n", hdr.Name)
 	if hdr.Name == "manifest.sig" {
 		fmt.Println("Parsing manifest.sig")
 		if _, err = io.Copy(&artifact.ManifestSig, tarElement); err != nil {
-			return 0, err
+			return err
 		}
 		fmt.Println("Parsed manifest.sig")
 		fmt.Println(artifact.ManifestSig)
 		// Optional expect `manifest-augment`
 		hdr, err = tarElement.Next()
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if hdr.Name == "manifest-augment" {
 			if _, err = io.Copy(&artifact.ManifestAugment, tarElement); err != nil {
-				return 0, err
+				return err
 			}
 		}
 		fmt.Println("Parsed manifest-augment")
 		hdr, err = tarElement.Next()
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 	// Expect `header.tar.gz`
 	if hdr.Name != "header.tar.gz" {
-		return 0, fmt.Errorf("Expected `header.tar.gz`. Got %s", hdr.Name)
+		return fmt.Errorf("Expected `header.tar.gz`. Got %s", hdr.Name)
 	}
 	if err = artifact.HeaderTar.Parse(tarElement); err != nil {
 		fmt.Println("Error parsing header.tar.gz")
 		fmt.Println(err)
-		return 0, err
+		return err
 	}
 	fmt.Println("Parsed header.tar.gz")
 	fmt.Println(artifact.HeaderTar)
 	// Optional `header-augment.tar.gz`
 	hdr, err = tarElement.Next()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if hdr.Name == "header-augment.tar.gz" {
 		if _, err = io.Copy(&artifact.HeaderAugment, tarElement); err != nil {
-			return 0, err
+			return err
 		}
 		fmt.Println("Parsed header-augment")
 		hdr, err = tarElement.Next()
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 	// Need call next on `artifact`
 	// Expect `data`
 	fmt.Println("Ready to read `Data`")
 	if filepath.Dir(hdr.Name) != "data" {
-		return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
+		return fmt.Errorf("Expected `data`. Got %s", hdr.Name)
 	}
 	fmt.Printf("Data hdr: %s\n", hdr.Name)
 	fmt.Printf("Read all initial data, preparing to return Payloads\n")
 
-	return buf.Len(), nil
+	return nil
+}
+
+
+type PayloadReader struct {
+	tarElement *tar.Reader
+}
+
+func (p *PayloadReader) Read(b []byte) (n int, err error) {
+	// sha := sha256.New()
+	// tr := io.TeeReader(p.tarElement, sha)
+	return 0, nil
+
 }
 
 // Next returns the next payload in an artifact
 func (p *Parser) Next() (io.Reader, error) {
-
 	// Unzip the data/0000.tar.gz file
 	compressedReader, err := gzip.NewReader(p.tarElement)
 	if err != nil {

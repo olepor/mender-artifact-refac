@@ -5,6 +5,7 @@ package parser
 // * Get the checksum whilst parsing the Artifact
 // * Get the signature whilst parsing the Artifact
 // * Decide upon a structure, and API for moving out of POC
+// * Add logging, after deciding on the logger
 //
 
 import (
@@ -23,7 +24,21 @@ import (
 	"github.com/pkg/errors"
 	"io/ioutil"
 	"text/template"
+
+	log "github.com/sirupsen/logrus"
 )
+
+func init() {
+	// Log as JSON instead of the default ASCII formatter.
+	log.SetFormatter(&log.JSONFormatter{})
+
+	// Output to stdout instead of the default stderr
+	// Can be any io.Writer, see below for File example
+	log.SetOutput(os.Stdout)
+
+	// Only log the warning severity or above.
+	log.SetLevel(log.WarnLevel)
+}
 
 ///////////////////////////////////////////////
 // Simple parser for the mender-artifact format
@@ -49,6 +64,7 @@ func (v Version) String() string {
 
 // Accept the byte body from the tar reader
 func (v *Version) Write(b []byte) (n int, err error) {
+	log.Debug("Parsing  Version")
 	if err = json.Unmarshal(b, v); err != nil {
 		return 0, err
 	}
@@ -86,6 +102,7 @@ func (m Manifest) String() string {
 }
 
 func (m *Manifest) Write(b []byte) (n int, err error) {
+	log.Debug("Parsing Manifest")
 	r := bytes.NewBuffer(b)
 	scanner := bufio.NewScanner(r)
 	var line string
@@ -141,6 +158,7 @@ type ManifestAugment struct {
 }
 
 func (m *ManifestAugment) Write(b []byte) (n int, err error) {
+	log.Debug("Parsing manifest-augment")
 	br := bytes.NewReader(b)
 	scanner := bufio.NewScanner(br)
 	var line string
@@ -213,6 +231,7 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 	// The input is gzipped and tarred, so embed the two
 	// readers around the byte stream
 	// First wrap the gzip writer
+	log.Debug("Parsing header.tar")
 	sha := sha256.New()
 	teeReader := io.TeeReader(r, sha)
 	zr, err := gzip.NewReader(teeReader)
@@ -513,6 +532,7 @@ type HeaderAugment struct {
 }
 
 func (h *HeaderAugment) Write(b []byte) (n int, err error) {
+	log.Debug("Parsing header-augment.tar")
 	// The input is gzipped and tarred, so embed the two
 	// readers around the byte stream
 	// First wrap the gzip writer
@@ -737,6 +757,7 @@ type Parser struct {
 // Write parses an aritfact from the bytes it is fed.
 // TODO -- Change to parse method
 func (p *Parser) Parse(r io.Reader) error {
+	log.Debug("Parsing Artifact...")
 	artifact := New()
 	tarElement := tar.NewReader(r)
 	p.tarElement = tarElement

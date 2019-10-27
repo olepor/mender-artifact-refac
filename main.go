@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/olepor/ma-go/parser"
+	"github.com/olepor/mender-artifact-refac/parser"
 )
 
 func main() {

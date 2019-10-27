@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alecthomas/template"
+	"text/template"
 	"github.com/pkg/errors"
 )
 
@@ -245,11 +245,14 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 		if filepath.Base(hdr.Name) != "type-info" {
 			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
 		}
+		fmt.Println("Reading type-info")
 		sh := SubHeader{}
 		if _, err = io.Copy(sh.typeInfo, tr); err != nil {
 			return 0, errors.Wrap(err, "HeaderTar")
 		}
 		hdr, err = tr.Next()
+		fmt.Println("Reading next..")
+		fmt.Println(hdr, err)
 		// Finished reading `header.tar.gz`
 		if err == io.EOF {
 			fmt.Printf("subHeader read (EOF): %s\n", sh.String())
@@ -260,19 +263,30 @@ func (h *HeaderTar) Write(b []byte) (n int, err error) {
 		if err != nil {
 			return 0, errors.Wrap(err, "HeaderTar: failed to next hdr")
 		}
+		fmt.Println(hdr.Name)
 		if filepath.Base(hdr.Name) == "meta-data" {
 			_, err = io.Copy(sh.metaData, tr)
+			fmt.Println("Read meta-data")
 			if err != nil {
 				return 0, errors.Wrap(err, "HeaderTar: meta-data copy error")
 			}
 			hdr, err = tr.Next()
-			if err != nil {
+			fmt.Println("After meta-data")
+			fmt.Println(hdr)
+			fmt.Println(err)
+			fmt.Println()
+			if err == io.EOF {
+				fmt.Println("EOF after parsing meta-data in header")
+				break
+			} else if err != nil {
 				return 0, errors.Wrap(err, "HeaderTar: failed to get next header")
 			}
 		}
 		fmt.Printf("subHeader read: %s\n", sh.String())
 		h.headers = append(h.headers, sh)
 	}
+
+	return len(b), nil
 }
 
 func (h *HeaderTar) Read(b []byte) (n int, err error) {
@@ -792,15 +806,34 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	}
 	// Need call next on `artifact`
 	// Expect `data`
-	// fmt.Println("Ready to read `Data`")
-	// if filepath.Dir(hdr.Name) != "data" {
-	// 	return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
-	// }
-	// fmt.Printf("Data hdr: %s\n", hdr.Name)
-	// fmt.Printf("Read all initial data, preparing to return Payloads\n")
-	// // Store the necessary resources
-	// p.artifact = artifact
-	// p.tr = tr
+	fmt.Println("Ready to read `Data`")
+	if filepath.Dir(hdr.Name) != "data" {
+		return 0, fmt.Errorf("Expected `data`. Got %s", hdr.Name)
+	}
+	fmt.Printf("Data hdr: %s\n", hdr.Name)
+	fmt.Printf("Read all initial data, preparing to return Payloads\n")
+	// Unzip the data/0000.tar.gz file
+
+	// data/0000.tar
+	compressedReader, err = gzip.NewReader(tr)
+	if err != nil {
+		fmt.Println("Failed to open a gzip reader for the artifact")
+		// return 0, err
+		return 0, err
+	}
+
+	// payload reader
+	pr := tar.NewReader(compressedReader)
+	hdr, err = pr.Next()
+	if err != nil {
+		return 0, fmt.Errorf("Failed to get the tar info in 'data/0000.tar', Error: %v", err)
+	}
+	fmt.Println("Payload name: ")
+	fmt.Println(hdr.Name)
+	// Write the payload to stdout
+	io.Copy(os.Stdout, pr)
+
+
 	return buf.Len(), nil // TODO -- Which length to return (?)
 }
 

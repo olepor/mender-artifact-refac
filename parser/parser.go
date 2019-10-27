@@ -302,7 +302,7 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 	// Extract the checksum from buf
 	h.shaSum = sha.Sum(nil)
 	fmt.Printf("Header.tar.gz - shasum: %x\n", h.shaSum)
-	return err
+	return nil
 }
 
 func (h *HeaderTar) Read(b []byte) (n int, err error) {
@@ -699,6 +699,8 @@ func NewArtifactReader() *ArtifactReader {
 func (a *ArtifactReader) Parse(r io.Reader) (ar *Artifact, err error) {
 	p := Parser{}
 	io.Copy(&p, r)
+	a.p = &p
+	a.Artifact = p.artifact
 
 	return &p.artifact, nil
 	// return &Artifact{
@@ -717,7 +719,7 @@ func (a *ArtifactReader) Parse(r io.Reader) (ar *Artifact, err error) {
 	// }, nil
 }
 
-func (ar *ArtifactReader) Next() (*PayLoadData, error) {
+func (ar *ArtifactReader) Next() (io.Reader, error) {
 	return ar.p.Next()
 }
 
@@ -730,6 +732,7 @@ type Parser struct {
 }
 
 // Write parses an aritfact from the bytes it is fed.
+// TODO -- Change to parse method
 func (p *Parser) Write(b []byte) (n int, err error) {
 	var compressedReader io.Reader
 	buf := bytes.NewBuffer(b)
@@ -741,6 +744,7 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	}
 	artifact := New()
 	tarElement := tar.NewReader(compressedReader)
+	p.tarElement = tarElement
 	// Expect `version`
 	hdr, err := tarElement.Next()
 	if err != nil {
@@ -804,6 +808,8 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Expected `header.tar.gz`. Got %s", hdr.Name)
 	}
 	if err = artifact.HeaderTar.Parse(tarElement); err != nil {
+		fmt.Println("Error parsing header.tar.gz")
+		fmt.Println(err)
 		return 0, err
 	}
 	fmt.Println("Parsed header.tar.gz")
@@ -831,43 +837,31 @@ func (p *Parser) Write(b []byte) (n int, err error) {
 	}
 	fmt.Printf("Data hdr: %s\n", hdr.Name)
 	fmt.Printf("Read all initial data, preparing to return Payloads\n")
-	// Unzip the data/0000.tar.gz file
 
-	// data/0000.tar
-	compressedReader, err = gzip.NewReader(tarElement)
+	return buf.Len(), nil
+}
+
+// Next returns the next payload in an artifact
+func (p *Parser) Next() (io.Reader, error) {
+
+	// Unzip the data/0000.tar.gz file
+	compressedReader, err := gzip.NewReader(p.tarElement)
 	if err != nil {
 		fmt.Println("Failed to open a gzip reader for the artifact")
 		// return 0, err
-		return 0, err
+		return nil, err
 	}
-
-	// payload reader
+	// data/0000.tar
 	pr := tar.NewReader(compressedReader)
-	hdr, err = pr.Next()
+	hdr, err := pr.Next()
 	if err != nil {
-		return 0, fmt.Errorf("Failed to get the tar info in 'data/0000.tar', Error: %v", err)
+		return nil, fmt.Errorf("Failed to get the tar info in 'data/0000.tar', Error: %v", err)
 	}
 	fmt.Println("Payload name: ")
 	fmt.Println(hdr.Name)
 	// Write the payload to stdout
 	// io.Copy(os.Stdout, pr)
-
-	return buf.Len(), nil // TODO -- Which length to return (?)
-}
-
-// Next returns the next payload in an artifact
-func (p *Parser) Next() (*PayLoadData, error) {
-	tarElement := p.tarElement
-	hdr, err := tarElement.Next()
-	payload := &PayLoadData{}
-	nr, err := io.Copy(payload, tarElement)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
-		return nil, errors.Wrap(err, fmt.Sprintf("Parser: Writer: Failed to read the payload: Written: %d, Expected: %d", nr, hdr.Size))
-	}
-	return payload, nil
+	return pr, nil
 }
 
 // Read - Creates an artifact from the underlying artifact struct

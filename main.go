@@ -24,6 +24,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
+	ar.Next()
 	// fmt.Println(artifact)
 	// fmt.Println(artifact.Manifest)
 }

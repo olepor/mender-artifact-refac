@@ -37,7 +37,7 @@ func init() {
 	log.SetOutput(os.Stdout)
 
 	// Only log the warning severity or above.
-	log.SetLevel(log.WarnLevel)
+	log.SetLevel(log.TraceLevel)
 }
 
 ///////////////////////////////////////////////
@@ -62,7 +62,20 @@ func (v Version) String() string {
 		v.shaSum)
 }
 
-// Accept the byte body from the tar reader
+func (v *Version) Parse(r io.Reader) error {
+	if v == nil {
+		v = &Version{}
+	}
+	sha := sha256.New()
+	mw := io.MultiWriter(v, sha)
+	if _, err := io.Copy(mw, r); err != nil {
+		return errors.Wrap(err, "Parser: Write: Failed to read version")
+	}
+	v.shaSum = sha.Sum(nil)
+	return nil
+}
+
+// Write Accept the byte body from the tar reader
 func (v *Version) Write(b []byte) (n int, err error) {
 	log.Debug("Parsing  Version")
 	if err = json.Unmarshal(b, v); err != nil {
@@ -101,9 +114,10 @@ func (m Manifest) String() string {
 	return buf.String()
 }
 
-func (m *Manifest) Write(b []byte) (n int, err error) {
-	log.Debug("Parsing Manifest")
-	r := bytes.NewBuffer(b)
+func (m *Manifest) Parse(r io.Reader) error {
+	if m == nil {
+		m = &Manifest{} /* Allow parsing into an empty value */
+	}
 	scanner := bufio.NewScanner(r)
 	var line string
 	for scanner.Scan() {
@@ -114,7 +128,7 @@ func (m *Manifest) Write(b []byte) (n int, err error) {
 				Signature: tmp[0],
 				Name:      tmp[2]})
 	}
-	return len(b), nil
+	return nil
 }
 
 func (m *Manifest) Read(b []byte) (n int, err error) {
@@ -140,9 +154,14 @@ func (m *ManifestSig) String() string {
 	return fmt.Sprintf("Manifest Signature: %x", m.sig)
 }
 
-func (m *ManifestSig) Write(b []byte) (n int, err error) {
-	m.sig = b
-	return len(b), nil
+func (m *ManifestSig) Parse(r io.Reader) error {
+	if m == nil {
+		m = &ManifestSig{}
+	}
+	sig, err := ioutil.ReadAll(r)
+	m.sig = sig
+	return err
+
 }
 
 func (m *ManifestSig) Read(b []byte) (n int, err error) {
@@ -157,10 +176,12 @@ type ManifestAugment struct {
 	augData []ManifestData
 }
 
-func (m *ManifestAugment) Write(b []byte) (n int, err error) {
+func (m *ManifestAugment) Parse(r io.Reader) error {
+	if m == nil {
+		m = &ManifestAugment{}
+	}
 	log.Debug("Parsing manifest-augment")
-	br := bytes.NewReader(b)
-	scanner := bufio.NewScanner(br)
+	scanner := bufio.NewScanner(r)
 	var line string
 	for scanner.Scan() {
 		line = scanner.Text()
@@ -170,7 +191,7 @@ func (m *ManifestAugment) Write(b []byte) (n int, err error) {
 				Signature: tmp[0],
 				Name:      tmp[1]})
 	}
-	return len(b), nil
+	return nil
 }
 
 func (m *ManifestAugment) Read(b []byte) (n int, err error) {
@@ -228,6 +249,9 @@ func (h HeaderTar) String() string {
 //             |
 //             `---000n ...
 func (h *HeaderTar) Parse(r io.Reader) error {
+	if h == nil {
+		h = &HeaderTar{} /* TODO -- Maybe set the standard script path here? */
+	}
 	// The input is gzipped and tarred, so embed the two
 	// readers around the byte stream
 	// First wrap the gzip writer
@@ -658,14 +682,14 @@ func (d *Data) Read(b []byte) (n int, err error) {
 }
 
 type Artifact struct {
-	Version         Version
-	Manifest        Manifest
-	ManifestSig     ManifestSig
-	ManifestAugment ManifestAugment
-	HeaderTar       HeaderTar
-	HeaderAugment   HeaderAugment
-	HeaderSigned    HeaderSigned
-	Data            Data
+	Version         *Version
+	Manifest        *Manifest
+	ManifestSig     *ManifestSig
+	ManifestAugment *ManifestAugment
+	HeaderTar       *HeaderTar
+	HeaderAugment   *HeaderAugment
+	HeaderSigned    *HeaderSigned
+	Data            *Data
 }
 
 func (a *Artifact) String() string {
@@ -690,18 +714,18 @@ func (a *Artifact) String() string {
 // New returns an instantiated basic artifact, ready for parsing
 func New() *Artifact {
 	return &Artifact{
-		Version:         Version{},
-		Manifest:        Manifest{},
-		ManifestSig:     ManifestSig{},
-		ManifestAugment: ManifestAugment{},
-		HeaderTar: HeaderTar{
+		// Version:         Version{},
+		// Manifest:        Manifest{},
+		// ManifestSig:     ManifestSig{},
+		// ManifestAugment: ManifestAugment{},
+		HeaderTar: &HeaderTar{
 			scripts: &Scripts{
 				scriptDir: "/Users/olepor/go/src/github.com/olepor/ma-go/scripts", // TODO - make this configureable
 			},
 		},
-		HeaderAugment: HeaderAugment{},
-		HeaderSigned:  HeaderSigned{},
-		Data:          Data{},
+		// HeaderAugment: HeaderAugment{},
+		// HeaderSigned:  HeaderSigned{},
+		// Data:          Data{},
 	}
 }
 
@@ -769,12 +793,9 @@ func (p *Parser) Parse(r io.Reader) error {
 	if hdr.Name != "version" {
 		return fmt.Errorf("Expected version. Got %s", hdr.Name)
 	}
-	sha := sha256.New()
-	mw := io.MultiWriter(&artifact.Version, sha)
-	if _, err = io.Copy(mw, tarElement); err != nil {
-		return errors.Wrap(err, "Parser: Write: Failed to read version")
+	if err = artifact.Version.Parse(tarElement); err != nil {
+		return fmt.Errorf("Failed to parse the Version header, error: %v", err)
 	}
-	artifact.Version.shaSum = sha.Sum(nil)
 	log.Trace("Parsed version")
 	log.Trace(artifact.Version)
 	// Expect `manifest`
@@ -785,8 +806,8 @@ func (p *Parser) Parse(r io.Reader) error {
 	if hdr.Name != "manifest" {
 		return fmt.Errorf("Expected `manifest`. Got %s", hdr.Name)
 	}
-	if _, err = io.Copy(&artifact.Manifest, tarElement); err != nil {
-		return err
+	if err = artifact.Manifest.Parse(tarElement); err != nil {
+		return fmt.Errorf("Failed to parse the Manifest header. Error: %v", err)
 	}
 	log.Trace("Parsed manifest")
 	log.Trace(artifact.Manifest)
@@ -798,8 +819,8 @@ func (p *Parser) Parse(r io.Reader) error {
 	log.Trace("hdr.Name: %s\n", hdr.Name)
 	if hdr.Name == "manifest.sig" {
 		log.Trace("Parsing manifest.sig")
-		if _, err = io.Copy(&artifact.ManifestSig, tarElement); err != nil {
-			return err
+		if err = artifact.ManifestSig.Parse(tarElement); err != nil {
+			return fmt.Errorf("Failed to parse the Manifest signature. Error: %v", err)
 		}
 		log.Trace("Parsed manifest.sig")
 		log.Trace(artifact.ManifestSig)
@@ -809,8 +830,8 @@ func (p *Parser) Parse(r io.Reader) error {
 			return err
 		}
 		if hdr.Name == "manifest-augment" {
-			if _, err = io.Copy(&artifact.ManifestAugment, tarElement); err != nil {
-				return err
+			if err = artifact.ManifestAugment.Parse(tarElement); err != nil {
+				return fmt.Errorf("Failed to parse 'manifest-augment'. Error: %v", err)
 			}
 		}
 		log.Trace("Parsed manifest-augment")
@@ -836,7 +857,7 @@ func (p *Parser) Parse(r io.Reader) error {
 		return err
 	}
 	if hdr.Name == "header-augment.tar.gz" {
-		if _, err = io.Copy(&artifact.HeaderAugment, tarElement); err != nil {
+		if _, err = io.Copy(artifact.HeaderAugment, tarElement); err != nil {
 			return err
 		}
 		log.Trace("Parsed header-augment")
@@ -856,7 +877,6 @@ func (p *Parser) Parse(r io.Reader) error {
 
 	return nil
 }
-
 
 type PayloadReader struct {
 	tarElement *tar.Reader

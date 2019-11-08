@@ -209,16 +209,16 @@ func (m *ManifestAugment) Read(b []byte) (n int, err error) {
 }
 
 type HeaderTar struct {
-	headerInfo HeaderInfo
-	scripts    *Scripts
-	headers    []SubHeader
-	shaSum     []byte
+	HeaderInfo *HeaderInfo
+	Scripts    *Scripts
+	Headers    []SubHeader
+	ShaSum     []byte
 }
 
 func (h HeaderTar) String() string {
 	s := bytes.NewBuffer(nil)
-	s.WriteString("Scripts: " + h.scripts.String())
-	for _, header := range h.headers {
+	s.WriteString("Scripts: " + h.Scripts.String())
+	for _, header := range h.Headers {
 		s.WriteString(header.String())
 	}
 	return s.String()
@@ -271,28 +271,26 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 		return fmt.Errorf("Unexpected header: %s", hdr.Name)
 	}
 	// Read the header info
-	if _, err = io.Copy(h.headerInfo, tarElement); err != nil {
+	if err = h.HeaderInfo.Parse(tarElement); err != nil {
+		return fmt.Errorf("Failed to parse 'header-info'. Error: %v", err)
+	}
+	hdr, err = tarElement.Next()
+	if err != nil {
 		return err
 	}
 	// Read all the scripts
-	for {
-		hdr, err = tarElement.Next()
-		if err != nil {
-			return err
+	if strings.HasPrefix(hdr.Name, "strings") {
+		for {
+			err = h.Scripts.Parse(tarElement)
+			fmt.Println("Parsing scripts...")
+			switch err {
+			case io.EOF:
+				break // Move on to parse headers
+			default:
+				return fmt.Errorf("Failed to parse 'scripts'. Error: %v", err)
+			}
 		}
-		if filepath.Dir(hdr.Name) == "headers/0000" { //  && atoi(hdr.Name) { TODO -- fixup
-			break // Move on to parsing headers
-		}
-		if filepath.Dir(hdr.Name) != "scripts" {
-			return fmt.Errorf("Expected scripts. Got: %s", hdr.Name)
-		}
-		if err = h.scripts.Next(filepath.Base(hdr.Name)); err != nil {
-			return err
-		}
-		if _, err = io.Copy(h.scripts, tarElement); err != nil {
-			log.Trace("Scripts copy... err")
-			return err
-		}
+		log.Trace("Parsed scripts")
 	}
 	// Read all the headers
 	for {
@@ -313,7 +311,7 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 		if err == io.EOF {
 			log.Trace("subHeader read (EOF): %s\n", sh.String())
 			log.Trace(sh.typeInfo)
-			h.headers = append(h.headers, sh)
+			h.Headers = append(h.Headers, sh)
 			return nil
 		}
 		if err != nil {
@@ -339,12 +337,12 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 			}
 		}
 		log.Trace("subHeader read: %s\n", sh.String())
-		h.headers = append(h.headers, sh)
+		h.Headers = append(h.Headers, sh)
 	}
 
 	// Extract the checksum from buf
-	h.shaSum = sha.Sum(nil)
-	log.Trace("Header.tar.gz - shasum: %x\n", h.shaSum)
+	h.ShaSum = sha.Sum(nil)
+	log.Trace("Header.tar.gz - shasum: %x\n", h.ShaSum)
 	return nil
 }
 
@@ -385,6 +383,14 @@ type HeaderInfo struct {
 	ArtifactDepends  ArtifactDepends  `json:"artifact_depends"`
 }
 
+func (h *HeaderInfo) Parse(r io.Reader) error {
+	if h == nil {
+		h = &HeaderInfo{}
+	}
+	_, err := io.Copy(h, r)
+	return err
+}
+
 func (h HeaderInfo) String() string {
 	buf := bytes.NewBuffer(nil)
 	for _, payload := range h.Payloads {
@@ -421,6 +427,34 @@ type Scripts struct {
 	currentScriptName string
 	file              *os.File
 	names             []string
+}
+
+// Parse The scripts Parse function reads a file from the tar reader
+// and writes it to /scripts/<ScriptName>. One file at a time.
+func (s *Scripts) Parse(tr *tar.Reader) error {
+	if s == nil {
+		s = &Scripts{}
+	}
+	hdr, err := tr.Next()
+	log.Trace("Parsing scripts from: %v", hdr)
+	fmt.Println(hdr.Name)
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(hdr.Name) == "headers/0000" {
+		return io.EOF // Move on to parsing headers
+	}
+	if filepath.Dir(hdr.Name) != "scripts" {
+		return fmt.Errorf("Expected scripts. Got: %s", hdr.Name)
+	}
+	if err = s.Next(filepath.Base(hdr.Name)); err != nil {
+		return err
+	}
+	_, err = io.Copy(s.file, tr)
+	if err != nil {
+		return fmt.Errorf("Failed to parse 'scripts'. Error: %v", err)
+	}
+	return nil
 }
 
 func (s *Scripts) String() string {
@@ -719,7 +753,7 @@ func New() *Artifact {
 		// ManifestSig:     ManifestSig{},
 		// ManifestAugment: ManifestAugment{},
 		HeaderTar: &HeaderTar{
-			scripts: &Scripts{
+			Scripts: &Scripts{
 				scriptDir: "/Users/olepor/go/src/github.com/olepor/ma-go/scripts", // TODO - make this configureable
 			},
 		},

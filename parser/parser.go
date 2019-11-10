@@ -301,7 +301,7 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 		}
 		log.Trace("Reading type-info")
 		sh := SubHeader{}
-		if _, err = io.Copy(sh.typeInfo, tarElement); err != nil {
+		if err = sh.typeInfo.Parse(tarElement); err != nil {
 			return errors.Wrap(err, "HeaderTar")
 		}
 		hdr, err = tarElement.Next()
@@ -319,11 +319,10 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 		}
 		log.Trace(hdr.Name)
 		if filepath.Base(hdr.Name) == "meta-data" {
-			_, err = io.Copy(sh.metaData, tarElement)
-			log.Trace("Read meta-data")
-			if err != nil {
-				return errors.Wrap(err, "HeaderTar: meta-data copy error")
+			if err = sh.metaData.Parse(tarElement); err != nil {
+				return errors.Wrap(err, "HeaderTar: meta-data: ")
 			}
+			log.Trace("Read meta-data")
 			hdr, err = tarElement.Next()
 			log.Trace("After meta-data")
 			log.Trace(hdr)
@@ -504,6 +503,17 @@ type TypeInfo struct {
 	TypeInfoDepends  TypeInfoDepends  `json:"artifact_depends"`
 }
 
+func (t *TypeInfo) Parse(r *tar.Reader) error {
+	if t == nil {
+		t = &TypeInfo{}
+	}
+	bytes, err := ioutil.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(bytes, &t)
+}
+
 func (t TypeInfo) String() string {
 	typeinfotmplstr := `{{ if .Type}} {{ printf "%s" .Type }} {{ end }}
 {{ if .TypeInfoProvides}} {{ printf "%s" .TypeInfoProvides }} {{ end }}
@@ -519,14 +529,6 @@ func (t TypeInfo) String() string {
 	return buf.String()
 }
 
-func (t TypeInfo) Write(b []byte) (n int, err error) {
-	err = json.Unmarshal(b, &t)
-	if err != nil {
-		return 0, errors.Wrap(err, "TypeInfo: Write: Failed to unmarshal json")
-	}
-	return len(b), err
-}
-
 func (t TypeInfo) Read(b []byte) (n int, err error) {
 	b, err = json.Marshal(&t)
 	if err != nil {
@@ -537,6 +539,11 @@ func (t TypeInfo) Read(b []byte) (n int, err error) {
 
 type MetaData struct {
 	// meta-data
+}
+
+func (m *MetaData) Parse(r *tar.Reader) error {
+	_, err := io.Copy(ioutil.Discard, r)
+	return err
 }
 
 func (m MetaData) String() string {
@@ -566,8 +573,38 @@ func (t MetaData) Read(b []byte) (n int, err error) {
 //        +- meta-data
 type SubHeader struct {
 	name     string
-	typeInfo TypeInfo
-	metaData MetaData
+	typeInfo *TypeInfo
+	metaData *MetaData
+}
+
+func (s *SubHeader) Parse(r *tar.Reader) {
+	if s == nil {
+		s = &SubHeader{}
+	}
+
+	// hdr.Name is already set, as we broke out of the script parsing loop
+	// if filepath.Base(hdr.Name) != "type-info" {
+	// 	return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
+	// }
+	// sh := SubHeader{}
+	// if _, err = io.Copy(sh.typeInfo, tarElement); err != nil {
+	// 	return 0, err
+	// }
+	// hdr, err = tarElement.Next()
+	// if err != nil {
+	// 	return 0, err
+	// }
+	// if filepath.Base(hdr.Name) == "meta-data" {
+	// 	_, err = io.Copy(sh.metaData, tarElement)
+	// 	if err != nil {
+	// 		return 0, err
+	// 	}
+	// 	hdr, err = tarElement.Next()
+	// 	if err != nil {
+	// 		return 0, err
+	// 	}
+	// }
+	// h.subHeaders = append(h.subHeaders, sh)
 }
 
 func (s *SubHeader) String() string {
@@ -585,7 +622,7 @@ type HeaderSigned struct {
 // Another tar-ball
 // Augmented header is not signed!
 type HeaderAugment struct {
-	headerInfo HeaderInfo
+	headerInfo *HeaderInfo
 	subHeaders []SubHeader
 }
 
@@ -608,6 +645,9 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Unexpected header: %s", hdr.Name)
 	}
 	// Read the header info
+	if err = h.headerInfo.Parse(tarElement); err != nil {
+		return 0, err
+	}
 	if _, err = io.Copy(h.headerInfo, tarElement); err != nil {
 		return 0, nil
 	}
@@ -618,7 +658,7 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 			return 0, fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type
 		}
 		sh := SubHeader{}
-		if _, err = io.Copy(sh.typeInfo, tarElement); err != nil {
+		if err = sh.typeInfo.Parse(tarElement); err != nil {
 			return 0, err
 		}
 		hdr, err = tarElement.Next()
@@ -626,8 +666,7 @@ func (h *HeaderAugment) Write(b []byte) (n int, err error) {
 			return 0, err
 		}
 		if filepath.Base(hdr.Name) == "meta-data" {
-			_, err = io.Copy(sh.metaData, tarElement)
-			if err != nil {
+			if err = sh.metaData.Parse(tarElement); err != nil {
 				return 0, err
 			}
 			hdr, err = tarElement.Next()

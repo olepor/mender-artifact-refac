@@ -17,17 +17,17 @@ func main() {
 		fmt.Println("Failed to open the mender-artifact file")
 		return
 	}
-	ar := parser.NewArtifactReader()
-	_, err = ar.Parse(f)
+	ar := parser.New()
+	err = ar.Parse(f)
 	if err != nil {
 		fmt.Println("Failed to parse the artifact")
 		fmt.Println(err)
 		return
 	}
-	_, err = ar.Next()
-	if err != nil {
-		fmt.Println("Failed to get the payload")
-		os.Exit(1)
-	}
+	// _, err = ar.Next()
+	// if err != nil {
+	// 	fmt.Println("Failed to get the payload")
+	// 	os.Exit(1)
+	// }
 	// io.Copy(os.Stdout, r)
 }

@@ -763,6 +763,9 @@ type Artifact struct {
 	HeaderAugment   *HeaderAugment
 	HeaderSigned    *HeaderSigned
 	Data            *Data
+
+	// The local parser
+	// p               *Parser
 }
 
 func (a *Artifact) String() string {
@@ -802,62 +805,12 @@ func New() *Artifact {
 	}
 }
 
-// ArtifactReader wraps a reader, and parses it into an artifact
-type ArtifactReader struct {
-	r        io.Reader
-	p        *Parser
-	Artifact Artifact
-}
-
-func NewArtifactReader() *ArtifactReader {
-	return &ArtifactReader{}
-}
-
-func (a *ArtifactReader) Parse(r io.Reader) (ar *Artifact, err error) {
-	p := Parser{}
-	err = p.Parse(r)
-	if err != nil {
-		return nil, err
-	}
-	a.p = &p
-	a.Artifact = p.artifact
-
-	return &p.artifact, nil
-	// return &Artifact{
-	// 	Version:         Version{},
-	// 	Manifest:        Manifest{},
-	// 	ManifestSig:     ManifestSig{},
-	// 	ManifestAugment: ManifestAugment{},
-	// 	HeaderTar: HeaderTar{
-	// 		scripts: &Scripts{
-	// 			scriptDir: "/Users/olepor/go/src/github.com/olepor/ma-go/scripts", // TODO - make this configureable
-	// 		},
-	// 	},
-	// 	HeaderAugment: HeaderAugment{},
-	// 	HeaderSigned:  HeaderSigned{},
-	// 	Data:          Data{},
-	// }, nil
-}
-
-func (ar *ArtifactReader) Next() (io.Reader, error) {
-	return ar.p.Next()
-}
-
-// Parser parses a mender-artifact
-type Parser struct {
-	// The parser
-	// lexer *Lexer
-	artifact   Artifact
-	tarElement *tar.Reader
-}
-
 // Write parses an aritfact from the bytes it is fed.
 // TODO -- Change to parse method
-func (p *Parser) Parse(r io.Reader) error {
+func (p *Artifact) Parse(r io.Reader) error {
 	log.Debug("Parsing Artifact...")
 	artifact := New()
 	tarElement := tar.NewReader(r)
-	p.tarElement = tarElement
 	// Expect `version`
 	hdr, err := tarElement.Next()
 	if err != nil {
@@ -949,42 +902,4 @@ func (p *Parser) Parse(r io.Reader) error {
 	log.Trace("Read all initial data, preparing to return Payloads\n")
 
 	return nil
-}
-
-type PayloadReader struct {
-	tarElement *tar.Reader
-}
-
-func (p *PayloadReader) Read(b []byte) (n int, err error) {
-	// sha := sha256.New()
-	// tr := io.TeeReader(p.tarElement, sha)
-	return 0, nil
-
-}
-
-// Next returns the next payload in an artifact
-func (p *Parser) Next() (io.Reader, error) {
-	// Unzip the data/0000.tar.gz file
-	compressedReader, err := gzip.NewReader(p.tarElement)
-	if err != nil {
-		log.Trace("Failed to open a gzip reader for the artifact")
-		// return 0, err
-		return nil, err
-	}
-	// data/0000.tar
-	pr := tar.NewReader(compressedReader)
-	hdr, err := pr.Next()
-	if err != nil {
-		return nil, fmt.Errorf("Failed to get the tar info in 'data/0000.tar', Error: %v", err)
-	}
-	log.Trace("Payload name: ")
-	log.Trace(hdr.Name)
-	// Write the payload to stdout
-	// io.Copy(os.Stdout, pr)
-	return pr, nil
-}
-
-// Read - Creates an artifact from the underlying artifact struct
-func (p *Parser) Read(b []byte) (n int, err error) {
-	return 0, errors.New("Unimplemented")
 }

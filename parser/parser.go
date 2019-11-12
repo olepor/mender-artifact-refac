@@ -234,19 +234,19 @@ func (h HeaderTar) String() string {
 //      |    +---State_Leave
 //      |    +---State_Error
 //      |    `---<more scripts>
-//        |
-//        `---headers
-//           |
-//    	|         +---0000
-//           |    |
-//    	|         |    +---type-info
-//           |    |
-//    	|         |    +---meta-data
-//           |
-//    	|         +---0001
-//           |    |
-//    	|         |    `---<more headers>
-//             |
+//      |
+//      | `---headers
+//      |    |
+//    	|    |    +---0000
+//      |    |    |
+//    	|    |    |    +---type-info
+//      |    |    |
+//    	|    |    |    +---meta-data
+//      |    |
+//    	|    |    +---0001
+//      |    |    |
+//    	|    |    |    `---<more headers>
+//      |    |
 //             `---000n ...
 func (h *HeaderTar) Parse(r io.Reader) error {
 	if h == nil {
@@ -293,8 +293,8 @@ func (h *HeaderTar) Parse(r io.Reader) error {
 		log.Trace("Parsed scripts")
 	}
 	// Read all the headers
+	log.Trace("Reading all the subheaders")
 	for {
-		log.Trace("Reading all the subheaders")
 		// hdr.Name is already set, as we broke out of the script parsing loop
 		if filepath.Base(hdr.Name) != "type-info" {
 			return fmt.Errorf("Expected `type-info`. Got %s", hdr.Name) // TODO - this should probs be a parseError type

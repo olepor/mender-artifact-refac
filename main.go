@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/olepor/mender-artifact-refac/parser"
+	"github.com/olepor/mender-artifact-refac/artifact"
 )
 
 func main() {
@@ -17,7 +17,7 @@ func main() {
 		fmt.Println("Failed to open the mender-artifact file")
 		return
 	}
-	ar := parser.New()
+	ar := artifact.New()
 	err = ar.Parse(f)
 	if err != nil {
 		fmt.Println("Failed to parse the artifact")

@@ -1,4 +1,4 @@
-package parser
+package artifact
 
 // TODO's
 //
@@ -803,6 +803,17 @@ func New() *Artifact {
 		// HeaderSigned:  HeaderSigned{},
 		// Data:          Data{},
 	}
+}
+
+type parser struct {
+	curTok string // TODO -- Upgrade to a type identifier
+	curElement *element
+	nextElement *element
+}
+
+type element struct {
+	hdr *tar.Header
+	data io.Reader
 }
 
 // Write parses an aritfact from the bytes it is fed.
